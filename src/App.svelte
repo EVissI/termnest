@@ -1,200 +1,164 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import TerminalPane from './components/TerminalPane.svelte';
-  import StatusIndicator from './components/StatusIndicator.svelte';
-  import {
-    errorMessage,
-    sessionApi,
-    type SessionId,
-    type SessionState,
-    type SessionStateEvent,
-  } from './lib/ipc';
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+  import { api, errorMessage } from './lib/ipc';
+  import { bindings, comboOf } from './lib/hotkeys';
+  import { attempt, runAction } from './lib/actions';
+  import { initStore, store, toast, ui, windowLabel } from './stores/app.svelte';
+  import Sidebar from './components/Sidebar.svelte';
+  import TabBar from './components/TabBar.svelte';
+  import Workspace from './components/Workspace.svelte';
+  import SftpPanel from './components/SftpPanel.svelte';
+  import HostDialog from './components/HostDialog.svelte';
+  import KeyGenDialog from './components/KeyGenDialog.svelte';
+  import DeployWizard from './components/DeployWizard.svelte';
+  import SnippetDialog from './components/SnippetDialog.svelte';
+  import SnippetPalette from './components/SnippetPalette.svelte';
+  import SettingsDialog from './components/SettingsDialog.svelte';
+  import PromptDialog from './components/PromptDialog.svelte';
+  import ConfirmDialog from './components/ConfirmDialog.svelte';
+  import TextPromptDialog from './components/TextPromptDialog.svelte';
+  import WindowDialogs from './components/WindowDialogs.svelte';
+  import Toasts from './components/Toasts.svelte';
 
-  let target = $state('');
-  let keyPath = $state('');
-  let sessionId = $state<SessionId | null>(null);
-  let sessionState = $state<SessionState | null>(null);
-  let errorText = $state('');
-  let busy = $state(false);
-  let pane: ReturnType<typeof TerminalPane>;
+  let ready = $state(false);
+  let fatal = $state('');
 
-  // State events can arrive before `session_open` returns the id, so keep the latest per id.
-  // Plain Map on purpose: it is a lookup table, nothing renders from it.
-  // eslint-disable-next-line svelte/prefer-svelte-reactivity
-  const latestEvents = new Map<SessionId, SessionStateEvent>();
+  const keymap = $derived(bindings(store.settings?.hotkeys ?? {}));
 
-  const active = $derived(sessionState === 'connecting' || sessionState === 'connected');
+  /** Dialogs that take the keyboard: global hotkeys are off while one is open. */
+  const modalOpen = $derived(
+    !!ui.confirm ||
+      !!ui.textPrompt ||
+      !!ui.hostDialog ||
+      ui.settingsOpen ||
+      ui.keyGenOpen ||
+      !!ui.deploy ||
+      !!ui.snippetEdit ||
+      !!ui.closeRequest ||
+      !!ui.hostKeyChanged ||
+      store.prompts.length > 0,
+  );
 
   onMount(() => {
-    let unlisten: (() => void) | null = null;
-    let disposed = false;
-    sessionApi
-      .onState((event) => {
-        latestEvents.set(event.id, event);
-        applyState(event);
+    initStore()
+      .then(async () => {
+        ready = true;
+        const info = await api.startupInfo();
+        ui.restorePending = info.restore_pending;
+        for (const w of info.warnings) toast(w, 'error', 15000);
       })
-      .then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      });
-    sessionApi.defaultKeyPath().then((path) => {
-      if (path && !keyPath) keyPath = path;
-    });
+      .catch((e) => (fatal = errorMessage(e)));
+
+    const onKey = (e: KeyboardEvent) => {
+      const combo = comboOf(e);
+      if (!combo) return;
+      const action = keymap.get(combo);
+      if (!action) return;
+      if (modalOpen && action !== 'snippets.palette') return;
+      if (ui.palette && action !== 'snippets.palette') return;
+      e.preventDefault();
+      e.stopPropagation();
+      void runAction(action);
+    };
+    window.addEventListener('keydown', onKey, true);
+    // Disable the browser's own context menu outside of our handlers.
+    const noMenu = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('input, textarea')) e.preventDefault();
+    };
+    window.addEventListener('contextmenu', noMenu);
     return () => {
-      disposed = true;
-      unlisten?.();
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('contextmenu', noMenu);
     };
   });
 
-  function applyState(event: SessionStateEvent): void {
-    if (event.id !== sessionId) return;
-    sessionState = event.state;
-    errorText = event.error?.message ?? '';
+  // Window title: "termnest" for the first window, "termnest (2)" for others.
+  $effect(() => {
+    const index = store.layout.windows.findIndex((w) => w.label === windowLabel);
+    const title = index > 0 ? `termnest (${index + 1})` : 'termnest';
+    getCurrentWebviewWindow().setTitle(title).catch(() => {});
+  });
 
-    if (event.state === 'connected') {
-      pane.focus();
-    } else if (event.state === 'error' || event.state === 'disconnected') {
-      const color = event.state === 'error' ? '31' : '90';
-      const text = errorText || 'Сессия завершена';
-      pane.print(`\r\n\x1b[${color}m[${text}]\x1b[0m\r\n`);
-      sessionApi.close(event.id).catch(() => {});
-      latestEvents.delete(event.id);
-      sessionId = null;
-    }
+  // Selection only makes sense for panels that still exist.
+  $effect(() => {
+    const ids = new Set(
+      store.layout.windows.flatMap((w) => w.tabs).flatMap((t) => collect(t.root)),
+    );
+    if (ui.selected.some((id) => !ids.has(id))) ui.selected = ui.selected.filter((id) => ids.has(id));
+  });
+
+  function collect(node: import('./lib/ipc').LayoutNode): number[] {
+    return node.type === 'pane' ? [node.id] : [...collect(node.first), ...collect(node.second)];
   }
 
-  async function connect(e: SubmitEvent): Promise<void> {
-    e.preventDefault();
-    if (busy) return;
-    busy = true;
-    try {
-      if (sessionId !== null) {
-        const old = sessionId;
-        sessionId = null;
-        await sessionApi.close(old);
-      }
-      pane.reset();
-      errorText = '';
-      sessionState = 'connecting';
-      pane.print(`\x1b[90mПодключение к ${target.trim()}...\x1b[0m\r\n`);
-
-      const { cols, rows } = pane.size();
-      const id = await sessionApi.open(target, keyPath, cols, rows);
-      sessionId = id;
-      const early = latestEvents.get(id);
-      if (early) applyState(early);
-    } catch (err) {
-      sessionState = 'error';
-      errorText = errorMessage(err);
-      pane.print(`\x1b[31m[${errorText}]\x1b[0m\r\n`);
-    } finally {
-      busy = false;
-    }
-  }
-
-  function disconnect(): void {
-    if (sessionId !== null) sessionApi.close(sessionId).catch(() => {});
+  async function reconnectAll(): Promise<void> {
+    ui.restorePending = false;
+    await attempt(() => api.restoreConnectAll());
   }
 </script>
 
-<div class="app">
-  <form class="toolbar" onsubmit={connect}>
-    <input
-      class="target"
-      bind:value={target}
-      placeholder="user@host:port"
-      spellcheck="false"
-      autocomplete="off"
-      aria-label="Адрес сервера"
-    />
-    <input
-      class="key"
-      bind:value={keyPath}
-      placeholder="Путь к приватному ключу"
-      spellcheck="false"
-      autocomplete="off"
-      aria-label="Путь к приватному ключу"
-    />
-    {#if active}
-      <button type="button" onclick={disconnect}>Отключить</button>
-    {:else}
-      <button type="submit" class="primary" disabled={busy || !target.trim()}>Подключить</button>
+{#if fatal}
+  <div class="fatal">
+    <h2>Не удалось запустить termnest</h2>
+    <p>{fatal}</p>
+  </div>
+{:else if ready && store.settings}
+  <div class="app">
+    <Sidebar />
+    <div class="main">
+      {#if ui.restorePending}
+        <div class="restore">
+          <span>Раскладка восстановлена. Переподключить все сессии?</span>
+          <button class="btn primary" type="button" onclick={reconnectAll}>Подключить все</button>
+          <button class="btn" type="button" onclick={() => (ui.restorePending = false)}>Не сейчас</button>
+        </div>
+      {/if}
+      <TabBar />
+      <Workspace />
+    </div>
+    {#if ui.sftpOpen}
+      <SftpPanel />
     {/if}
-    <StatusIndicator state={sessionState} />
-    {#if errorText}
-      <span class="error" title={errorText}>{errorText}</span>
-    {/if}
-  </form>
+  </div>
 
-  <main class="terminal-area">
-    <TerminalPane bind:this={pane} {sessionId} />
-  </main>
-</div>
+  {#if ui.hostDialog}<HostDialog host={ui.hostDialog} />{/if}
+  {#if ui.keyGenOpen}<KeyGenDialog />{/if}
+  {#if ui.deploy}<DeployWizard hostId={ui.deploy.hostId} keyPath={ui.deploy.keyPath} />{/if}
+  {#if ui.snippetEdit}<SnippetDialog snippet={ui.snippetEdit} />{/if}
+  {#if ui.palette}<SnippetPalette />{/if}
+  {#if ui.settingsOpen}<SettingsDialog />{/if}
+  <WindowDialogs />
+  <PromptDialog />
+  <TextPromptDialog />
+  <ConfirmDialog />
+{/if}
+<Toasts />
 
 <style>
   .app {
     display: flex;
-    flex-direction: column;
     height: 100%;
   }
-
-  .toolbar {
+  .main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+  .restore {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
-    background: var(--bg-panel);
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-panel));
     border-bottom: 1px solid var(--border);
-    min-width: 0;
   }
-
-  input {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 5px 8px;
-    outline: none;
-    min-width: 0;
-  }
-  input:focus {
-    border-color: var(--accent);
-  }
-  .target {
-    flex: 0 1 240px;
-  }
-  .key {
-    flex: 1 1 320px;
-  }
-
-  button {
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 5px 14px;
-    cursor: pointer;
-  }
-  button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .error {
-    color: var(--err);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-
-  .terminal-area {
+  .restore span {
     flex: 1;
-    min-height: 0;
-    padding: 4px 0 0 6px;
-    background: #14161b;
+  }
+  .fatal {
+    padding: 40px;
   }
 </style>

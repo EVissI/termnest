@@ -1,24 +1,25 @@
 <script lang="ts">
   import type { SessionState } from '../lib/ipc';
 
-  let { state }: { state: SessionState | null } = $props();
+  let { state, label = true }: { state: SessionState | null | 'held'; label?: boolean } = $props();
 
-  const labels: Record<SessionState, string> = {
+  const labels: Record<string, string> = {
     connecting: 'Подключение',
     connected: 'Подключено',
     reconnecting: 'Переподключение',
     disconnected: 'Отключено',
     error: 'Ошибка',
+    held: 'Ожидает подключения',
   };
 
-  const label = $derived(state ? labels[state] : 'Не подключено');
+  const text = $derived(state ? labels[state] : 'Не подключено');
 </script>
 
-<span class="status" data-state={state ?? 'idle'} title={label}>
-  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+<span class="status" data-state={state ?? 'idle'} title={text}>
+  <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
     <circle cx="5" cy="5" r="4" />
   </svg>
-  {label}
+  {#if label}{text}{/if}
 </span>
 
 <style>

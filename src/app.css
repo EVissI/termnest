@@ -1,7 +1,10 @@
 :root {
+  /* Theme variables are overwritten by applyUiTheme(). */
   --bg: #14161b;
   --bg-panel: #1b1f27;
   --bg-input: #0f1115;
+  --bg-hover: rgb(255 255 255 / 6%);
+  --bg-active: rgb(59 130 246 / 22%);
   --border: #2a2f3a;
   --text: #e5e7eb;
   --text-dim: #8b93a1;
@@ -9,6 +12,7 @@
   --ok: #22c55e;
   --warn: #eab308;
   --err: #ef4444;
+  --broadcast: #f97316;
   color-scheme: dark;
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
@@ -26,10 +30,182 @@ body,
   margin: 0;
   height: 100%;
   overflow: hidden;
+  background: var(--bg);
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
   color: inherit;
+}
+
+input,
+select,
+textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  outline: none;
+  min-width: 0;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+input[type='checkbox'] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn.danger {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+button.icon:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+button.icon.active {
+  color: var(--accent);
+  background: var(--bg-active);
+}
+
+button.icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.field > span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  cursor: pointer;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.error-text {
+  color: var(--err);
+}
+
+.warn-box,
+.err-box,
+.ok-box {
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+
+.warn-box {
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.err-box {
+  border: 1px solid color-mix(in srgb, var(--err) 60%, transparent);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+
+.ok-box {
+  border: 1px solid color-mix(in srgb, var(--ok) 50%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-dim) 35%, transparent);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
