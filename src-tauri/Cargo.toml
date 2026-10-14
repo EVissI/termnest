@@ -1,0 +1,25 @@
+[package]
+name = "termnest"
+version = "0.1.0"
+description = "Personal SSH client for Windows"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[workspace]
+members = ["core"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+termnest-core = { path = "core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

@@ -1,0 +1,16 @@
+[package]
+name = "termnest-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[dependencies]
+russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "test-util"] }

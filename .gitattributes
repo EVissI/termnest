@@ -1,0 +1,6 @@
+* text=auto
+# Scripts executed inside the Linux build container must keep LF endings.
+*.sh text eol=lf
+docker/** text eol=lf
+*.ico binary
+*.png binary
