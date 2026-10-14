@@ -59,7 +59,7 @@
 </Modal>
 
 <style>
-  input,
+  input:not([type='checkbox']),
   textarea {
     width: 100%;
   }
