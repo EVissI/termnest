@@ -1,19 +1,20 @@
 //! SSH sessions. A session lives here independently of any window or panel;
 //! the UI only subscribes to its output and sends input by id.
 
-mod connection;
 mod output;
+mod runner;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
-use serde::Serialize;
+use russh::client::Handle;
+use russh_sftp::client::SftpSession;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::error::{CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, ErrorKind};
+use crate::ssh::{Client, SshContext};
 use crate::target::Target;
 
 use output::OutputHub;
@@ -22,7 +23,7 @@ pub use output::OutputSink;
 pub type SessionId = u64;
 
 /// How much recent output each session keeps for replay to new subscribers.
-const OUTPUT_BUFFER_BYTES: usize = 256 * 1024;
+const OUTPUT_BUFFER_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,37 +35,72 @@ pub enum SessionState {
     Error,
 }
 
-/// Receiver of session state changes (the app forwards them as `session://state`).
-pub trait StateSink: Send + Sync + 'static {
-    fn state_changed(&self, id: SessionId, state: SessionState, error: Option<&CoreError>);
+/// Where to connect. Stored in the layout so a panel can be restored later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectSpec {
+    /// Display name (host name from the server list or the target string).
+    pub label: String,
+    /// Saved host this spec came from, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    pub key_path: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ConnectOptions {
-    pub target: Target,
-    pub key_path: PathBuf,
-    pub cols: u32,
-    pub rows: u32,
-    pub keepalive_interval: Option<Duration>,
-    pub connect_timeout: Duration,
-}
+impl ConnectSpec {
+    pub fn target(&self) -> Target {
+        Target {
+            user: self.user.clone(),
+            host: self.host.clone(),
+            port: self.port,
+        }
+    }
 
-impl ConnectOptions {
-    pub fn new(target: Target, key_path: PathBuf, cols: u32, rows: u32) -> Self {
+    pub fn from_target(target: &Target, key_path: String, label: Option<String>) -> Self {
         Self {
-            target,
+            label: label.unwrap_or_else(|| target.to_string()),
+            host_id: None,
+            user: target.user.clone(),
+            host: target.host.clone(),
+            port: target.port,
             key_path,
-            cols: cols.max(1),
-            rows: rows.max(1),
-            keepalive_interval: Some(Duration::from_secs(30)),
-            connect_timeout: Duration::from_secs(15),
         }
     }
 }
 
+/// Current status of a session, sent to the UI on every change.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionStatus {
+    pub id: SessionId,
+    pub label: String,
+    pub state: SessionState,
+    pub error: Option<CoreError>,
+    /// Reconnect: attempt number and delay until the next try.
+    pub attempt: u32,
+    pub retry_in_ms: Option<u64>,
+    /// Exit code of the remote shell if it ended by itself.
+    pub exit_code: Option<u32>,
+}
+
+/// Receiver of session state changes (the app forwards them as `session://state`).
+pub trait StateSink: Send + Sync + 'static {
+    fn state_changed(&self, status: &SessionStatus);
+}
+
 pub(crate) enum Command {
     Data(Vec<u8>),
-    Resize { cols: u32, rows: u32 },
+    Resize {
+        cols: u32,
+        rows: u32,
+    },
+    /// Connect again after an error or after the shell exited.
+    Retry,
+    /// Skip the remaining reconnect delay.
+    ReconnectNow,
+    /// Stop reconnecting and stay disconnected.
+    CancelReconnect,
     Close,
 }
 
@@ -73,21 +109,40 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 pub(crate) struct SessionEntry {
-    id: SessionId,
-    state: Mutex<SessionState>,
+    spec: ConnectSpec,
+    status: Mutex<SessionStatus>,
     output: Mutex<OutputHub>,
     commands: mpsc::UnboundedSender<Command>,
     state_sink: Arc<dyn StateSink>,
+    handle: Mutex<Option<Arc<Handle<Client>>>>,
+    sftp: tokio::sync::Mutex<Option<Arc<SftpSession>>>,
 }
 
 impl SessionEntry {
-    pub(crate) fn set_state(&self, state: SessionState, error: Option<&CoreError>) {
-        *lock(&self.state) = state;
-        self.state_sink.state_changed(self.id, state, error);
+    pub(crate) fn publish(&self, update: impl FnOnce(&mut SessionStatus)) {
+        let snapshot = {
+            let mut status = lock(&self.status);
+            update(&mut status);
+            status.clone()
+        };
+        self.state_sink.state_changed(&snapshot);
     }
 
     pub(crate) fn push_output(&self, data: &[u8]) {
         lock(&self.output).push(data);
+    }
+
+    /// A gray status line in the terminal (seen by all subscribers and replays).
+    pub(crate) fn notice(&self, text: &str, color: u8) {
+        self.push_output(format!("\r\n\x1b[{color}m[{text}]\x1b[0m\r\n").as_bytes());
+    }
+
+    pub(crate) fn set_handle(&self, handle: Option<Arc<Handle<Client>>>) {
+        *lock(&self.handle) = handle;
+    }
+
+    pub(crate) async fn drop_sftp(&self) {
+        *self.sftp.lock().await = None;
     }
 }
 
@@ -95,31 +150,52 @@ pub struct SessionManager {
     sessions: Mutex<HashMap<SessionId, Arc<SessionEntry>>>,
     next_id: AtomicU64,
     state_sink: Arc<dyn StateSink>,
+    ctx: Arc<SshContext>,
 }
 
 impl SessionManager {
-    pub fn new(state_sink: Arc<dyn StateSink>) -> Self {
+    pub fn new(state_sink: Arc<dyn StateSink>, ctx: Arc<SshContext>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             state_sink,
+            ctx,
         }
+    }
+
+    pub fn context(&self) -> &Arc<SshContext> {
+        &self.ctx
     }
 
     /// Registers a new session and starts connecting in the background.
     /// Progress is reported through the [`StateSink`]. Must be called inside a Tokio runtime.
-    pub fn open(&self, options: ConnectOptions) -> SessionId {
+    pub fn open(&self, spec: ConnectSpec, cols: u32, rows: u32) -> SessionId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::unbounded_channel();
         let entry = Arc::new(SessionEntry {
-            id,
-            state: Mutex::new(SessionState::Connecting),
+            status: Mutex::new(SessionStatus {
+                id,
+                label: spec.label.clone(),
+                state: SessionState::Connecting,
+                error: None,
+                attempt: 0,
+                retry_in_ms: None,
+                exit_code: None,
+            }),
+            spec,
             output: Mutex::new(OutputHub::new(OUTPUT_BUFFER_BYTES)),
             commands: tx,
             state_sink: self.state_sink.clone(),
+            handle: Mutex::new(None),
+            sftp: tokio::sync::Mutex::new(None),
         });
         lock(&self.sessions).insert(id, entry.clone());
-        tokio::spawn(connection::run(entry, options, rx));
+        tokio::spawn(runner::run(
+            entry,
+            self.ctx.clone(),
+            rx,
+            (cols.max(1), rows.max(1)),
+        ));
         id
     }
 
@@ -130,8 +206,21 @@ impl SessionManager {
             .ok_or_else(CoreError::session_not_found)
     }
 
-    pub fn state(&self, id: SessionId) -> CoreResult<SessionState> {
-        Ok(*lock(&self.get(id)?.state))
+    pub fn status(&self, id: SessionId) -> CoreResult<SessionStatus> {
+        Ok(lock(&self.get(id)?.status).clone())
+    }
+
+    pub fn statuses(&self) -> Vec<SessionStatus> {
+        let mut all: Vec<_> = lock(&self.sessions)
+            .values()
+            .map(|e| lock(&e.status).clone())
+            .collect();
+        all.sort_by_key(|s| s.id);
+        all
+    }
+
+    pub fn spec(&self, id: SessionId) -> CoreResult<ConnectSpec> {
+        Ok(self.get(id)?.spec.clone())
     }
 
     /// Subscribes to output. Buffered output is replayed to the sink first.
@@ -145,20 +234,46 @@ impl SessionManager {
         }
     }
 
-    pub fn write(&self, id: SessionId, data: Vec<u8>) -> CoreResult<()> {
-        if !data.is_empty() {
-            // A send error only means the connection already ended; the state event says so.
-            let _ = self.get(id)?.commands.send(Command::Data(data));
-        }
+    fn send(&self, id: SessionId, cmd: Command) -> CoreResult<()> {
+        // A send error only means the runner already ended; the state event says so.
+        let _ = self.get(id)?.commands.send(cmd);
         Ok(())
     }
 
+    pub fn write(&self, id: SessionId, data: Vec<u8>) -> CoreResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        self.send(id, Command::Data(data))
+    }
+
+    /// Writes the same input to several sessions (broadcast, snippets). Unknown ids are skipped.
+    pub fn write_many(&self, ids: &[SessionId], data: &[u8]) {
+        for id in ids {
+            let _ = self.write(*id, data.to_vec());
+        }
+    }
+
     pub fn resize(&self, id: SessionId, cols: u32, rows: u32) -> CoreResult<()> {
-        let _ = self.get(id)?.commands.send(Command::Resize {
-            cols: cols.max(1),
-            rows: rows.max(1),
-        });
-        Ok(())
+        self.send(
+            id,
+            Command::Resize {
+                cols: cols.max(1),
+                rows: rows.max(1),
+            },
+        )
+    }
+
+    pub fn retry(&self, id: SessionId) -> CoreResult<()> {
+        self.send(id, Command::Retry)
+    }
+
+    pub fn reconnect_now(&self, id: SessionId) -> CoreResult<()> {
+        self.send(id, Command::ReconnectNow)
+    }
+
+    pub fn cancel_reconnect(&self, id: SessionId) -> CoreResult<()> {
+        self.send(id, Command::CancelReconnect)
     }
 
     /// Closes the session by user request and forgets it.
@@ -168,35 +283,101 @@ impl SessionManager {
         }
     }
 
+    pub fn close_all(&self) {
+        let all: Vec<_> = lock(&self.sessions).drain().map(|(_, e)| e).collect();
+        for entry in all {
+            let _ = entry.commands.send(Command::Close);
+        }
+    }
+
     pub fn ids(&self) -> Vec<SessionId> {
         let mut ids: Vec<_> = lock(&self.sessions).keys().copied().collect();
         ids.sort_unstable();
         ids
+    }
+
+    /// SFTP over the session's existing SSH connection (a separate channel, no new login).
+    pub async fn sftp(&self, id: SessionId) -> CoreResult<Arc<SftpSession>> {
+        let entry = self.get(id)?;
+        let mut slot = entry.sftp.lock().await;
+        if let Some(s) = slot.as_ref() {
+            return Ok(s.clone());
+        }
+        let handle = lock(&entry.handle)
+            .clone()
+            .ok_or_else(|| CoreError::new(ErrorKind::Unreachable, "Сессия не подключена"))?;
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(crate::ssh::map_ssh_error)?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(crate::ssh::map_ssh_error)?;
+        let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| {
+            CoreError::new(
+                ErrorKind::Protocol,
+                format!("SFTP недоступен на сервере: {e}"),
+            )
+        })?;
+        let sftp = Arc::new(sftp);
+        *slot = Some(sftp.clone());
+        Ok(sftp)
+    }
+
+    /// Runs a command on a separate exec channel of the session's connection.
+    pub async fn exec(&self, id: SessionId, command: &str) -> CoreResult<crate::ssh::ExecOutput> {
+        let entry = self.get(id)?;
+        let handle = lock(&entry.handle)
+            .clone()
+            .ok_or_else(|| CoreError::new(ErrorKind::Unreachable, "Сессия не подключена"))?;
+        crate::ssh::exec(&handle, command, None).await
+    }
+
+    /// Forgets the cached SFTP session (after a protocol error).
+    pub async fn reset_sftp(&self, id: SessionId) {
+        if let Ok(entry) = self.get(id) {
+            entry.drop_sftp().await;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hostkeys::KnownHosts;
+    use crate::paths::test_dir::TestDir;
+    use crate::prompt::NoPrompts;
+    use crate::secret::PassphraseCache;
+    use std::time::Duration;
 
-    struct Recorder(Mutex<Vec<(SessionId, SessionState, Option<crate::ErrorKind>)>>);
+    struct Recorder(Mutex<Vec<(SessionId, SessionState, Option<ErrorKind>)>>);
 
     impl StateSink for Recorder {
-        fn state_changed(&self, id: SessionId, state: SessionState, error: Option<&CoreError>) {
+        fn state_changed(&self, s: &SessionStatus) {
             self.0
                 .lock()
                 .unwrap()
-                .push((id, state, error.map(|e| e.kind)));
+                .push((s.id, s.state, s.error.as_ref().map(|e| e.kind)));
         }
     }
 
-    fn options(key_path: PathBuf) -> ConnectOptions {
-        let mut o = ConnectOptions::new("me@127.0.0.1:1".parse().unwrap(), key_path, 80, 24);
-        o.connect_timeout = Duration::from_secs(2);
-        o
+    fn manager(dir: &TestDir) -> (SessionManager, Arc<Recorder>) {
+        let rec = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let ctx = Arc::new(SshContext::new(
+            Arc::new(NoPrompts),
+            Arc::new(KnownHosts::load(dir.path().join("kh")).unwrap()),
+            Arc::new(PassphraseCache::default()),
+            30,
+        ));
+        (SessionManager::new(rec.clone(), ctx), rec)
     }
 
-    async fn wait_for_final_state(rec: &Recorder) -> (SessionState, Option<crate::ErrorKind>) {
+    fn spec(key_path: &str) -> ConnectSpec {
+        ConnectSpec::from_target(&"me@127.0.0.1:1".parse().unwrap(), key_path.into(), None)
+    }
+
+    async fn wait_for_final_state(rec: &Recorder) -> (SessionState, Option<ErrorKind>) {
         for _ in 0..200 {
             if let Some(&(_, state, kind)) = rec.0.lock().unwrap().last() {
                 if state != SessionState::Connecting {
@@ -210,22 +391,22 @@ mod tests {
 
     #[tokio::test]
     async fn missing_key_reports_error_state() {
-        let rec = Arc::new(Recorder(Mutex::new(Vec::new())));
-        let manager = SessionManager::new(rec.clone());
-        let id = manager.open(options(PathBuf::from("definitely/missing/key")));
+        let dir = TestDir::new();
+        let (manager, rec) = manager(&dir);
+        let id = manager.open(spec("definitely/missing/key"), 80, 24);
 
         let (state, kind) = wait_for_final_state(&rec).await;
         assert_eq!(state, SessionState::Error);
-        assert_eq!(kind, Some(crate::ErrorKind::KeyNotFound));
-        assert_eq!(manager.state(id).unwrap(), SessionState::Error);
+        assert_eq!(kind, Some(ErrorKind::KeyNotFound));
+        assert_eq!(manager.status(id).unwrap().state, SessionState::Error);
     }
 
     #[tokio::test]
     async fn ids_are_unique_and_close_forgets_session() {
-        let rec = Arc::new(Recorder(Mutex::new(Vec::new())));
-        let manager = SessionManager::new(rec);
-        let a = manager.open(options(PathBuf::from("missing-a")));
-        let b = manager.open(options(PathBuf::from("missing-b")));
+        let dir = TestDir::new();
+        let (manager, _rec) = manager(&dir);
+        let a = manager.open(spec("missing-a"), 80, 24);
+        let b = manager.open(spec("missing-b"), 80, 24);
         assert_ne!(a, b);
         assert_eq!(manager.ids(), vec![a, b]);
 
@@ -233,7 +414,7 @@ mod tests {
         assert_eq!(manager.ids(), vec![b]);
         assert_eq!(
             manager.write(a, b"x".to_vec()).unwrap_err().kind,
-            crate::ErrorKind::SessionNotFound
+            ErrorKind::SessionNotFound
         );
     }
 }

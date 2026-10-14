@@ -1,12 +1,11 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::State;
-use termnest_core::session::ConnectOptions;
-use termnest_core::{
-    paths, CoreError, ErrorKind, OutputSink, SessionId, SessionManager, SessionState, Target,
-};
+use termnest_core::prompt::PromptReply;
+use termnest_core::{CoreError, OutputSink, SessionId, SessionStatus};
+
+use super::AppStateRef;
+use crate::prompts::PendingPrompt;
 
 /// Sends terminal output to the webview as raw bytes (an `ArrayBuffer` on the JS side).
 struct ChannelSink(Channel<InvokeResponseBody>);
@@ -18,72 +17,105 @@ impl OutputSink for ChannelSink {
 }
 
 #[tauri::command]
-pub async fn session_open(
-    manager: State<'_, SessionManager>,
-    target: String,
-    key_path: String,
-    cols: u32,
-    rows: u32,
-) -> Result<SessionId, CoreError> {
-    let target: Target = target.parse()?;
-    let key_path = key_path.trim();
-    if key_path.is_empty() {
-        return Err(CoreError::new(
-            ErrorKind::KeyNotFound,
-            "Не указан путь к ключу",
-        ));
-    }
-    let options = ConnectOptions::new(target, PathBuf::from(key_path), cols, rows);
-    Ok(manager.open(options))
-}
-
-#[tauri::command]
 pub fn session_subscribe(
-    manager: State<'_, SessionManager>,
+    state: AppStateRef<'_>,
     id: SessionId,
     on_output: Channel<InvokeResponseBody>,
 ) -> Result<u64, CoreError> {
-    manager.subscribe(id, Arc::new(ChannelSink(on_output)))
+    state
+        .sessions
+        .subscribe(id, Arc::new(ChannelSink(on_output)))
 }
 
 #[tauri::command]
-pub fn session_unsubscribe(manager: State<'_, SessionManager>, id: SessionId, subscription: u64) {
-    manager.unsubscribe(id, subscription);
+pub fn session_unsubscribe(state: AppStateRef<'_>, id: SessionId, subscription: u64) {
+    state.sessions.unsubscribe(id, subscription);
 }
 
 #[tauri::command]
 pub fn session_write(
-    manager: State<'_, SessionManager>,
+    state: AppStateRef<'_>,
     id: SessionId,
     data: Vec<u8>,
 ) -> Result<(), CoreError> {
-    manager.write(id, data)
+    state.sessions.write(id, data)
+}
+
+/// Same input to several sessions (broadcast mode, snippets).
+#[tauri::command]
+pub fn session_write_many(state: AppStateRef<'_>, ids: Vec<SessionId>, data: Vec<u8>) {
+    state.sessions.write_many(&ids, &data);
 }
 
 #[tauri::command]
 pub fn session_resize(
-    manager: State<'_, SessionManager>,
+    state: AppStateRef<'_>,
     id: SessionId,
     cols: u32,
     rows: u32,
 ) -> Result<(), CoreError> {
-    manager.resize(id, cols, rows)
+    state.sessions.resize(id, cols, rows)
 }
 
 #[tauri::command]
-pub fn session_close(manager: State<'_, SessionManager>, id: SessionId) {
-    manager.close(id);
+pub fn session_retry(state: AppStateRef<'_>, id: SessionId) -> Result<(), CoreError> {
+    state.sessions.retry(id)
 }
 
 #[tauri::command]
-pub fn session_state(
-    manager: State<'_, SessionManager>,
-    id: SessionId,
-) -> Result<SessionState, CoreError> {
-    manager.state(id)
+pub fn session_reconnect_now(state: AppStateRef<'_>, id: SessionId) -> Result<(), CoreError> {
+    state.sessions.reconnect_now(id)
 }
 
 #[tauri::command]
-pub fn default_key_path() -> Option<String> {
-    paths::default_key_path().map(|p| p.display().to_string())
+pub fn session_cancel_reconnect(state: AppStateRef<'_>, id: SessionId) -> Result<(), CoreError> {
+    state.sessions.cancel_reconnect(id)
+}
+
+#[tauri::command]
+pub fn session_statuses(state: AppStateRef<'_>) -> Vec<SessionStatus> {
+    state.sessions.statuses()
+}
+
+#[tauri::command]
+pub fn prompt_respond(state: AppStateRef<'_>, id: u64, reply: PromptReply) {
+    state.prompts.respond(id, reply);
+}
+
+#[tauri::command]
+pub fn prompt_pending(state: AppStateRef<'_>) -> Vec<PendingPrompt> {
+    state.prompts.pending()
+}
+
+#[derive(serde::Serialize)]
+pub struct KnownHost {
+    host: String,
+    port: u16,
+    key_type: String,
+    fingerprint: String,
+}
+
+#[tauri::command]
+pub fn known_hosts_list(state: AppStateRef<'_>) -> Vec<KnownHost> {
+    state
+        .known_hosts
+        .entries()
+        .into_iter()
+        .map(|e| KnownHost {
+            host: e.host,
+            port: e.port,
+            key_type: e.key_type,
+            fingerprint: e.fingerprint,
+        })
+        .collect()
+}
+
+/// Deletes the stored host key (the only way past a "host key changed" block).
+#[tauri::command]
+pub fn known_hosts_remove(
+    state: AppStateRef<'_>,
+    host: String,
+    port: u16,
+) -> Result<usize, CoreError> {
+    state.known_hosts.remove(&host, port)
 }

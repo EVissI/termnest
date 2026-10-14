@@ -1,11 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the main window",
-  "windows": ["main"],
+  "description": "Permissions for all termnest windows",
+  "windows": ["*"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
     "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text"
+    "clipboard-manager:allow-write-text",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "opener:allow-open-url"
   ]
 }
