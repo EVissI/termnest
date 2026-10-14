@@ -160,3 +160,57 @@ async fn shell_roundtrip() {
     manager.close(id);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Installs a freshly generated key with a password login, twice: the second run must
+/// not duplicate the key. Needs TERMNEST_TEST_PASSWORD as well.
+#[tokio::test]
+async fn key_deploy_is_idempotent() {
+    use termnest_core::keydeploy::DeployManager;
+    use termnest_core::keys::{self, KeyKind};
+    use termnest_core::secret::SecretString;
+
+    let (Some((target, _)), Ok(password)) = (config(), std::env::var("TERMNEST_TEST_PASSWORD"))
+    else {
+        eprintln!("TERMNEST_TEST_PASSWORD not set, skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("termnest-deploy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("id_deploy");
+    keys::generate(&key_path, KeyKind::Ed25519, "deploy-test", None, true).unwrap();
+
+    let ctx = SshContext::new(
+        Arc::new(TrustAll::default()),
+        Arc::new(KnownHosts::load(dir.join("known_hosts")).unwrap()),
+        Arc::new(PassphraseCache::default()),
+        30,
+    );
+    let deploys = DeployManager::default();
+
+    let first = deploys
+        .install(
+            &target,
+            SecretString::new(password.clone()),
+            key_path.clone(),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert!(first.added, "key must be added on the first run");
+    assert!(
+        first.verified,
+        "key login must work: {:?}",
+        first.verify_error
+    );
+    deploys.finish(first.deploy_id).await;
+
+    let second = deploys
+        .install(&target, SecretString::new(password), key_path.clone(), &ctx)
+        .await
+        .unwrap();
+    assert!(!second.added, "second run must not duplicate the key");
+    assert!(second.verified);
+    deploys.finish(second.deploy_id).await;
+
+    let _ = std::fs::remove_dir_all(dir);
+}

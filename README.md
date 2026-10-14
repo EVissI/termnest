@@ -5,18 +5,65 @@ Key-based authentication only, low memory footprint, local storage.
 
 Full specification: [SPEC.md](SPEC.md).
 
-## Status
+## Features
 
-Implemented stage by stage (see SPEC.md, section 9). Current: stage 1 (skeleton):
-one window, one terminal panel, connect by private key to `user@host:port`,
-resize, copy and paste.
+- Terminal on xterm.js (WebGL renderer with DOM fallback, truecolor, search, clickable
+  links, copy on select, multi-line paste warning).
+- Server manager: groups, search, quick connect `user@host:port`, import from
+  `~/.ssh/config`.
+- Host key verification against termnest's own `known_hosts`: unknown hosts ask for
+  the SHA256 fingerprint, changed keys are blocked until the old entry is removed.
+- Keys: list of `~/.ssh` keys, generation (Ed25519 / RSA 4096, owner-only ACL),
+  passphrase prompts kept in memory only, wizard that installs a key on a server
+  with a one-time password and optionally disables password logins.
+- Tabs and splits (arbitrary nesting), several windows, moving tabs between windows
+  without reconnecting.
+- Layout saved to `layout.json` and restored on start; automatic reconnect with
+  1, 2, 4 ... 30 s backoff.
+- Snippets with `{{variables}}`, palette (Ctrl+Shift+P), sending to the current,
+  selected or all panels, broadcast mode.
+- SFTP side panel over the same SSH connection: navigation, upload (also drag and drop
+  from Explorer), download, rename, delete, chmod, transfer queue.
+- Themes, fonts, remappable hotkeys.
+
+Passwords and passphrases are never written to disk.
+
+## Data
+
+`%APPDATA%\termnest\`: `hosts.toml`, `snippets.toml`, `settings.toml`, `layout.json`,
+`known_hosts`. Files are written atomically; a broken file is moved aside as
+`*.broken-<time>` and the app starts with defaults.
+
+## Default hotkeys
+
+| Action | Keys |
+|---|---|
+| New tab (server picker) | Ctrl+Shift+T |
+| Close panel/tab | Ctrl+Shift+W |
+| New window | Ctrl+Shift+N |
+| Split right / down | Alt+Shift+= / Alt+Shift+- |
+| Focus between panels | Alt+arrows |
+| Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab |
+| Duplicate session | Ctrl+Shift+D |
+| Snippet palette | Ctrl+Shift+P |
+| Search in terminal | Ctrl+Shift+F |
+| Copy / paste | Ctrl+Shift+C / Ctrl+Shift+V, right click |
+| Broadcast mode | Ctrl+Shift+B |
+| SFTP panel | Ctrl+Shift+S |
+| Sidebar | Ctrl+Shift+E |
+
+All of them can be changed in Settings.
 
 ## Project layout
 
 ```
-src/                    Svelte + TypeScript frontend (xterm.js terminal)
-src-tauri/              Tauri app crate: thin command layer and events
-src-tauri/core/         termnest-core: SSH sessions and other UI-independent logic
+src/                    Svelte + TypeScript frontend
+src/lib/terminal/       xterm.js wrapper
+src/lib/layout/         split geometry
+src/components/         UI components
+src/stores/             window state
+src-tauri/              Tauri app crate: commands, windows, prompts
+src-tauri/core/         termnest-core: sessions, hosts, keys, layout, SFTP (no Tauri)
 docker/                 Build/test container (cross-compilation for Windows)
 scripts/build.ps1       One-command Docker build or test run
 ```
@@ -73,3 +120,16 @@ cd src-tauri
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+End-to-end tests against a real SSH server (skipped unless configured):
+
+```powershell
+$env:TERMNEST_TEST_TARGET = "user@127.0.0.1:2222"
+$env:TERMNEST_TEST_KEY = "C:\path\to\private_key"
+$env:TERMNEST_TEST_PASSWORD = "..."   # only for the key deploy test
+cargo test -p termnest-core --test live_ssh
+```
+
+A disposable server: `docker run -d -p 127.0.0.1:2222:2222 -e PUBLIC_KEY="<public key>"
+-e USER_NAME=tester -e PASSWORD_ACCESS=true -e USER_PASSWORD=<password>
+linuxserver/openssh-server`.
