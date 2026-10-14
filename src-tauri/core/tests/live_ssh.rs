@@ -94,7 +94,7 @@ async fn shell_roundtrip() {
         30,
     ));
     let states = Arc::new(States::default());
-    let manager = SessionManager::new(states.clone(), ctx);
+    let manager = SessionManager::new(states.clone(), ctx, tokio::runtime::Handle::current());
     let spec = ConnectSpec::from_target(&target, key, None);
     let id = manager.open(spec.clone(), 100, 30);
 

@@ -77,6 +77,7 @@ pub struct TransferManager {
     sink: Arc<dyn TransferSink>,
     prompter: Arc<dyn Prompter>,
     limits: Mutex<HashMap<SessionId, Arc<Semaphore>>>,
+    runtime: tokio::runtime::Handle,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -90,13 +91,18 @@ pub enum Source {
 }
 
 impl TransferManager {
-    pub fn new(sink: Arc<dyn TransferSink>, prompter: Arc<dyn Prompter>) -> Arc<Self> {
+    pub fn new(
+        sink: Arc<dyn TransferSink>,
+        prompter: Arc<dyn Prompter>,
+        runtime: tokio::runtime::Handle,
+    ) -> Arc<Self> {
         Arc::new(Self {
             jobs: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             sink,
             prompter,
             limits: Mutex::new(HashMap::new()),
+            runtime,
         })
     }
 
@@ -141,7 +147,7 @@ impl TransferManager {
     }
 
     /// Queues transfers (one per source) into `destination` (a remote folder for
-    /// uploads, a local folder for downloads). Must be called inside a Tokio runtime.
+    /// uploads, a local folder for downloads).
     pub fn enqueue(
         self: &Arc<Self>,
         sftp: Arc<SftpSession>,
@@ -197,7 +203,7 @@ impl TransferManager {
             let destination = destination.clone();
             let policy = policy.clone();
             let limit = self.limit(session);
-            tokio::spawn(async move {
+            self.runtime.spawn(async move {
                 let _permit = limit.acquire_owned().await;
                 let mut run = Run::new(&this, job.clone(), sftp, policy);
                 run.set(|s| s.state = TransferState::Running);

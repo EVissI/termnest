@@ -87,6 +87,13 @@ pub struct HostsFile {
     pub hosts: Vec<Host>,
 }
 
+/// Hosts and groups as sent to the UI (the TOML file uses singular table names).
+#[derive(Debug, Clone, Serialize)]
+pub struct HostsList {
+    pub groups: Vec<Group>,
+    pub hosts: Vec<Host>,
+}
+
 pub struct HostStore {
     path: PathBuf,
     data: Mutex<HostsFile>,
@@ -146,6 +153,14 @@ impl HostStore {
 
     pub fn snapshot(&self) -> HostsFile {
         self.lock().clone()
+    }
+
+    pub fn list(&self) -> HostsList {
+        let data = self.lock();
+        HostsList {
+            groups: data.groups.clone(),
+            hosts: data.hosts.clone(),
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<Host> {
@@ -339,6 +354,16 @@ mod tests {
 
         store.delete(&b.id).unwrap();
         assert_eq!(store.snapshot().hosts.len(), 1);
+    }
+
+    #[test]
+    fn ui_list_uses_plural_keys() {
+        let dir = TestDir::new();
+        let store = HostStore::load(dir.path().join("h.toml")).unwrap();
+        store.upsert(host("a")).unwrap();
+        let json = serde_json::to_value(store.list()).unwrap();
+        assert_eq!(json["hosts"].as_array().unwrap().len(), 1);
+        assert_eq!(json["groups"].as_array().unwrap().len(), 1);
     }
 
     #[test]

@@ -1,11 +1,11 @@
-use termnest_core::hosts::{Host, HostsFile};
+use termnest_core::hosts::{Host, HostsList};
 use termnest_core::{paths, ssh_config, CoreError, ErrorKind};
 
 use super::AppStateRef;
 
 #[tauri::command]
-pub fn hosts_get(state: AppStateRef<'_>) -> HostsFile {
-    state.hosts.snapshot()
+pub fn hosts_get(state: AppStateRef<'_>) -> HostsList {
+    state.hosts.list()
 }
 
 #[tauri::command]

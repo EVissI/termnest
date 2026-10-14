@@ -100,12 +100,19 @@ impl AppState {
             Arc::new(PassphraseCache::default()),
             settings.get().keepalive_secs,
         ));
+        // Tauri's Tokio runtime: commands may run on the UI thread, so tasks are
+        // spawned through an explicit handle.
+        let tauri::async_runtime::RuntimeHandle::Tokio(runtime) = tauri::async_runtime::handle();
         let sessions = Arc::new(SessionManager::new(
             Arc::new(TauriStateSink(app.clone())),
             ctx.clone(),
+            runtime.clone(),
         ));
-        let transfers =
-            TransferManager::new(Arc::new(TauriTransferSink(app.clone())), prompts.clone());
+        let transfers = TransferManager::new(
+            Arc::new(TauriTransferSink(app.clone())),
+            prompts.clone(),
+            runtime,
+        );
 
         let (save_tx, save_rx) = mpsc::unbounded_channel();
         let state = Arc::new(Self {
@@ -176,7 +183,7 @@ impl AppState {
     }
 
     pub fn hosts_changed(&self) {
-        self.emit(events::HOSTS_CHANGED_EVENT, self.hosts.snapshot());
+        self.emit(events::HOSTS_CHANGED_EVENT, self.hosts.list());
     }
 }
 

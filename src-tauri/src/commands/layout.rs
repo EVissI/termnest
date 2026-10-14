@@ -226,7 +226,11 @@ pub fn pane_split(
 }
 
 #[tauri::command]
-pub fn pane_close(app: AppHandle, state: AppStateRef<'_>, pane: PaneId) -> Result<(), CoreError> {
+pub async fn pane_close(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    pane: PaneId,
+) -> Result<(), CoreError> {
     let removed = state.mutate_layout(|l| l.close_pane(pane))?;
     close_sessions(&state, &removed.sessions);
     close_if_empty(&app, &state, removed.window_empty);
@@ -239,7 +243,11 @@ pub fn pane_focus(state: AppStateRef<'_>, pane: PaneId) -> Result<(), CoreError>
 }
 
 #[tauri::command]
-pub fn tab_close(app: AppHandle, state: AppStateRef<'_>, tab: TabId) -> Result<(), CoreError> {
+pub async fn tab_close(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    tab: TabId,
+) -> Result<(), CoreError> {
     let removed = state.mutate_layout(|l| l.close_tab(tab))?;
     close_sessions(&state, &removed.sessions);
     close_if_empty(&app, &state, removed.window_empty);
@@ -279,32 +287,27 @@ pub fn split_set_ratio(
     state.mutate_layout(|l| l.set_ratio(tab, split, ratio))
 }
 
-/// Moves a tab within a window (reorder) or to another window. Never reconnects.
-#[tauri::command]
-pub fn tab_move(
-    app: AppHandle,
-    state: AppStateRef<'_>,
+fn move_tab_to(
+    app: &AppHandle,
+    state: &AppState,
     tab: TabId,
-    window: String,
+    window: &str,
     index: Option<usize>,
-) -> Result<(), CoreError> {
-    let emptied = state.mutate_layout(|l| l.move_tab(tab, &window, index))?;
-    if let Some(w) = app.get_webview_window(&window) {
+) -> CoreResult<()> {
+    let emptied = state.mutate_layout(|l| l.move_tab(tab, window, index))?;
+    if let Some(w) = app.get_webview_window(window) {
         let _ = w.set_focus();
     }
-    close_if_empty(&app, &state, emptied);
+    close_if_empty(app, state, emptied);
     Ok(())
 }
 
-/// Moves a tab into a new window, optionally placed at a screen point (physical pixels).
-#[tauri::command]
-pub fn tab_to_new_window(
-    app: AppHandle,
-    state: AppStateRef<'_>,
+fn move_tab_to_new_window(
+    app: &AppHandle,
+    state: &AppState,
     tab: TabId,
-    screen_x: Option<f64>,
-    screen_y: Option<f64>,
-) -> Result<String, CoreError> {
+    screen: Option<(f64, f64)>,
+) -> CoreResult<String> {
     let source = state
         .layout()
         .tab_window(tab)
@@ -316,35 +319,60 @@ pub fn tab_to_new_window(
         .and_then(|w| w.bounds)
         .map(|b| (b.width, b.height))
         .unwrap_or((1000, 650));
-    let bounds = match (screen_x, screen_y) {
-        (Some(x), Some(y)) => {
-            let scale = app
-                .get_webview_window(&source)
-                .and_then(|w| w.scale_factor().ok())
-                .unwrap_or(1.0);
-            Some(Bounds {
-                x: (x / scale) as i32 - 120,
-                y: (y / scale) as i32 - 16,
-                width,
-                height,
-            })
+    let bounds = screen.map(|(x, y)| {
+        let scale = app
+            .get_webview_window(&source)
+            .and_then(|w| w.scale_factor().ok())
+            .unwrap_or(1.0);
+        Bounds {
+            x: (x / scale) as i32 - 120,
+            y: (y / scale) as i32 - 16,
+            width,
+            height,
         }
-        _ => None,
-    };
-    let label = windows::new_label(&app);
+    });
+    let label = windows::new_label(app);
     let emptied = state.mutate_layout(|l| {
         l.add_window(&label, bounds);
         l.move_tab(tab, &label, None)
     })?;
-    windows::create_window(&app, &label, bounds, false)?;
-    close_if_empty(&app, &state, emptied);
+    windows::create_window(app, &label, bounds, false)?;
+    close_if_empty(app, state, emptied);
     Ok(label)
+}
+
+// Commands that create or close windows are async: on Windows a window must not be
+// created from a synchronous command, which runs on the event loop thread.
+
+/// Moves a tab within a window (reorder) or to another window. Never reconnects.
+#[tauri::command]
+pub async fn tab_move(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    tab: TabId,
+    window: String,
+    index: Option<usize>,
+) -> Result<(), CoreError> {
+    move_tab_to(&app, &state, tab, &window, index)
+}
+
+/// Moves a tab into a new window, optionally placed at a screen point (physical pixels).
+#[tauri::command]
+pub async fn tab_to_new_window(
+    app: AppHandle,
+    state: AppStateRef<'_>,
+    tab: TabId,
+    screen_x: Option<f64>,
+    screen_y: Option<f64>,
+) -> Result<String, CoreError> {
+    let screen = screen_x.zip(screen_y);
+    move_tab_to_new_window(&app, &state, tab, screen)
 }
 
 /// End of a tab drag outside its tab bar: drop into the window under the cursor
 /// or into a new window.
 #[tauri::command]
-pub fn tab_drop(
+pub async fn tab_drop(
     app: AppHandle,
     state: AppStateRef<'_>,
     tab: TabId,
@@ -353,7 +381,9 @@ pub fn tab_drop(
 ) -> Result<(), CoreError> {
     let source = state.layout().tab_window(tab).map(str::to_owned);
     match windows::window_at(&app, screen_x, screen_y) {
-        Some(target) if Some(&target) != source.as_ref() => tab_move(app, state, tab, target, None),
+        Some(target) if Some(&target) != source.as_ref() => {
+            move_tab_to(&app, &state, tab, &target, None)
+        }
         Some(_) => Ok(()),
         None => {
             let single_tab = source
@@ -361,10 +391,10 @@ pub fn tab_drop(
                 .and_then(|s| state.layout().window(s).map(|w| w.tabs.len() == 1))
                 .unwrap_or(false);
             if single_tab {
-                // Dragging the only tab out just moves its window.
+                // Dragging the only tab out of its window: nothing to split off.
                 return Ok(());
             }
-            tab_to_new_window(app, state, tab, Some(screen_x), Some(screen_y)).map(|_| ())
+            move_tab_to_new_window(&app, &state, tab, Some((screen_x, screen_y))).map(|_| ())
         }
     }
 }
@@ -392,7 +422,7 @@ pub fn window_list(state: AppStateRef<'_>) -> Vec<WindowInfo> {
 }
 
 #[tauri::command]
-pub fn window_new(app: AppHandle, state: AppStateRef<'_>) -> Result<String, CoreError> {
+pub async fn window_new(app: AppHandle, state: AppStateRef<'_>) -> Result<String, CoreError> {
     let label = windows::new_label(&app);
     state.mutate_layout(|l| {
         l.add_window(&label, None);
@@ -411,7 +441,7 @@ pub enum CloseAction {
 
 /// Answer to the "window has active sessions" dialog.
 #[tauri::command]
-pub fn window_close(
+pub async fn window_close(
     app: AppHandle,
     state: AppStateRef<'_>,
     label: String,

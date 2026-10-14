@@ -151,15 +151,23 @@ pub struct SessionManager {
     next_id: AtomicU64,
     state_sink: Arc<dyn StateSink>,
     ctx: Arc<SshContext>,
+    /// Session tasks run here, so `open` works from any thread (sync commands
+    /// run on the UI thread without a runtime context).
+    runtime: tokio::runtime::Handle,
 }
 
 impl SessionManager {
-    pub fn new(state_sink: Arc<dyn StateSink>, ctx: Arc<SshContext>) -> Self {
+    pub fn new(
+        state_sink: Arc<dyn StateSink>,
+        ctx: Arc<SshContext>,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             state_sink,
             ctx,
+            runtime,
         }
     }
 
@@ -168,7 +176,7 @@ impl SessionManager {
     }
 
     /// Registers a new session and starts connecting in the background.
-    /// Progress is reported through the [`StateSink`]. Must be called inside a Tokio runtime.
+    /// Progress is reported through the [`StateSink`].
     pub fn open(&self, spec: ConnectSpec, cols: u32, rows: u32) -> SessionId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::unbounded_channel();
@@ -190,7 +198,7 @@ impl SessionManager {
             sftp: tokio::sync::Mutex::new(None),
         });
         lock(&self.sessions).insert(id, entry.clone());
-        tokio::spawn(runner::run(
+        self.runtime.spawn(runner::run(
             entry,
             self.ctx.clone(),
             rx,
@@ -370,7 +378,10 @@ mod tests {
             Arc::new(PassphraseCache::default()),
             30,
         ));
-        (SessionManager::new(rec.clone(), ctx), rec)
+        (
+            SessionManager::new(rec.clone(), ctx, tokio::runtime::Handle::current()),
+            rec,
+        )
     }
 
     fn spec(key_path: &str) -> ConnectSpec {
