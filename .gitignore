@@ -1,0 +1,30 @@
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Node / Vite
+node_modules/
+dist/
+.svelte-kit/
+*.tsbuildinfo
+
+# Build output
+release/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+id_rsa*
+id_ed25519*
+id_ecdsa*
+known_hosts
+hosts.toml
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
