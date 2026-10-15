@@ -62,6 +62,20 @@
         <button class="btn primary" type="submit" form="passphrase-form">Разблокировать</button>
       {/snippet}
     </Modal>
+  {:else if r.kind === 'agent_action'}
+    <Modal title="Claude Code просит выполнить действие" onclose={() => reply({ kind: 'cancel' })} width={600}>
+      <div class="warn-box">
+        Агент хочет {r.action === 'exec' ? 'выполнить команду' : 'ввести текст в терминал'} на сервере <b>{r.server}</b>
+        (сессия {r.session}).
+      </div>
+      <pre class="mono cmd">{r.command}</pre>
+      <p class="hint">Проверьте команду. Без ответа в течение двух минут действие будет отклонено.</p>
+      {#snippet footer()}
+        <button class="btn" type="button" onclick={() => reply({ kind: 'cancel' })}>Отклонить</button>
+        <button class="btn" type="button" onclick={() => reply({ kind: 'confirm_session' })}>Разрешать в этой сессии</button>
+        <button class="btn danger" type="button" onclick={() => reply({ kind: 'confirm' })}>Разрешить</button>
+      {/snippet}
+    </Modal>
   {:else if r.kind === 'file_conflict'}
     <Modal title="Файл уже существует" onclose={() => reply({ kind: 'cancel' })} width={520}>
       <p>{r.remote ? 'На сервере уже есть' : 'На компьютере уже есть'}:</p>
@@ -88,6 +102,16 @@
   .fp .mono {
     font-size: 13px;
     margin-top: 2px;
+  }
+  .cmd {
+    margin: 8px 0;
+    padding: 8px 10px;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
   }
   .path {
     margin: 4px 0 10px;

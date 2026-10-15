@@ -22,6 +22,14 @@ pub enum PromptRequest {
         /// The previous attempt was wrong.
         retry: bool,
     },
+    /// Claude Code (through MCP) wants to act on a server.
+    AgentAction {
+        server: String,
+        session: u64,
+        /// `exec` (separate channel) or `input` (typed into the terminal).
+        action: String,
+        command: String,
+    },
     /// A file transfer target already exists.
     FileConflict {
         name: String,
@@ -43,6 +51,8 @@ pub enum ConflictAction {
 pub enum PromptReply {
     Cancel,
     Confirm,
+    /// Allow this and further actions in the same session.
+    ConfirmSession,
     Passphrase {
         value: SecretString,
         remember: bool,

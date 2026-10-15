@@ -1,6 +1,6 @@
 //! termnest's MCP tools (read-only) and the server lifecycle.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use termnest_core::layout::{Node, Pane};
 use termnest_core::mcp::{BoxFuture, McpServer, ToolDef, ToolProvider};
+use termnest_core::prompt::{PromptReply, PromptRequest};
 use termnest_core::settings::Settings;
 use termnest_core::{paths, project, sftp, CoreError, CoreResult, ErrorKind, SessionId};
 use tokio::io::AsyncReadExt;
@@ -54,6 +55,8 @@ pub struct McpHub {
     log: Mutex<VecDeque<LogEntry>>,
     selection: Mutex<HashMap<u64, oneshot::Sender<String>>>,
     next_request: AtomicU64,
+    /// Sessions where the user allowed agent actions until the session closes.
+    trusted: Mutex<HashSet<SessionId>>,
 }
 
 impl McpHub {
@@ -347,7 +350,77 @@ impl Tools {
                     .map_err(|e| e.message)?;
                 Ok(out.stdout.trim().to_owned())
             }
+            "exec" | "send_input" => {
+                let session = int_arg(args, "session")?;
+                let text = str_arg(args, if name == "exec" { "command" } else { "text" })?;
+                let spec = state.sessions.spec(session).map_err(|e| e.message)?;
+                if !Self::confirm(&state, session, &spec.label, name, &text).await {
+                    return Err("Пользователь отклонил действие в termnest.".into());
+                }
+                if name == "exec" {
+                    let out = state
+                        .sessions
+                        .exec(session, &text)
+                        .await
+                        .map_err(|e| e.message)?;
+                    Ok(format!(
+                        "exit code: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                        out.exit_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "?".into()),
+                        out.stdout.trim_end(),
+                        out.stderr.trim_end()
+                    ))
+                } else {
+                    let press_enter = args
+                        .get("press_enter")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    let mut data = text.into_bytes();
+                    if press_enter {
+                        data.push(b'\r');
+                    }
+                    state.sessions.write(session, data).map_err(|e| e.message)?;
+                    Ok("Отправлено в терминал. Результат смотрите через read_output.".into())
+                }
+            }
             _ => Err(format!("Неизвестный инструмент {name}")),
+        }
+    }
+
+    /// Asks the user in termnest; no answer within two minutes means "no".
+    async fn confirm(
+        state: &AppState,
+        session: SessionId,
+        server: &str,
+        action: &str,
+        command: &str,
+    ) -> bool {
+        if lock(&state.mcp.trusted).contains(&session) {
+            return true;
+        }
+        let request = PromptRequest::AgentAction {
+            server: server.to_owned(),
+            session,
+            action: if action == "exec" {
+                "exec".into()
+            } else {
+                "input".into()
+            },
+            command: command.to_owned(),
+        };
+        let reply = tokio::time::timeout(
+            Duration::from_secs(120),
+            termnest_core::prompt::ask(state.prompts.as_ref(), request),
+        )
+        .await;
+        match reply {
+            Ok(PromptReply::Confirm) => true,
+            Ok(PromptReply::ConfirmSession) => {
+                lock(&state.mcp.trusted).insert(session);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -394,6 +467,33 @@ impl ToolProvider for Tools {
                 name: "server_info",
                 description: "OS, kernel and uptime of the session's server (fixed read-only command).",
                 input_schema: session_schema(json!({})),
+            },
+            ToolDef {
+                name: "exec",
+                description: "Run a command on the session's server in a separate channel and get its output. \
+                    The user must approve it in termnest; it may be refused.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": { "type": "integer" },
+                        "command": { "type": "string" }
+                    },
+                    "required": ["session", "command"]
+                }),
+            },
+            ToolDef {
+                name: "send_input",
+                description: "Type text into the session's terminal (Enter is pressed unless press_enter is false). \
+                    The user must approve it in termnest; it may be refused.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session": { "type": "integer" },
+                        "text": { "type": "string" },
+                        "press_enter": { "type": "boolean" }
+                    },
+                    "required": ["session", "text"]
+                }),
             },
         ]
     }

@@ -72,7 +72,7 @@ pub async fn handle_message(provider: &dyn ToolProvider, msg: Value) -> Option<V
                     "serverInfo": { "name": "termnest", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": "termnest is the user's SSH client. Use these tools to read which servers \
                         and terminal sessions are open, what a terminal printed, and files on servers via SFTP. \
-                        All tools are read-only.",
+                        Reading tools need no approval; exec and send_input act on servers only after the user approves them in termnest.",
                 }),
             )
         }
