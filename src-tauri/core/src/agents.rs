@@ -323,6 +323,24 @@ fn command(program: &str) -> Command {
     cmd
 }
 
+/// What to do when the CLI is not logged in.
+pub fn auth_hint(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let auth = [
+        "authenticate",
+        "oauth",
+        "not logged in",
+        "login",
+        "api key",
+        "unauthorized",
+    ]
+    .iter()
+    .any(|m| lower.contains(m));
+    auth.then(|| {
+        "Claude Code не авторизован: в терминале Windows выполните `claude`, внутри - `/login`, затем повторите запрос.".to_owned()
+    })
+}
+
 /// Stops the CLI together with any processes it started (a `.cmd` wrapper, node, tools).
 async fn kill_tree(child: &mut tokio::process::Child) {
     #[cfg(windows)]
@@ -826,7 +844,7 @@ impl AgentManager {
                                         self.update(&id, |t| {
                                             t.result = Some(text.clone());
                                             t.cost_usd = Some(t.cost_usd.unwrap_or(0.0) + cost.unwrap_or(0.0));
-                                        }, Some((EventKind::Result, text.clone())));
+                                        }, Some((if is_error { EventKind::Error } else { EventKind::Result }, text.clone())));
                                         final_result = Some((text, is_error));
                                     }
                                 }
@@ -867,14 +885,20 @@ impl AgentManager {
                 },
                 None,
             ),
-            Some((text, true)) => self.update(
-                &id,
-                |t| {
-                    t.state = AgentState::Failed;
-                    t.error = Some(text);
-                },
-                None,
-            ),
+            Some((text, true)) => {
+                let hint = auth_hint(&text);
+                self.update(
+                    &id,
+                    |t| {
+                        t.state = AgentState::Failed;
+                        t.error = Some(match &hint {
+                            Some(h) => format!("{text}\n{h}"),
+                            None => text.clone(),
+                        });
+                    },
+                    hint.map(|h| (EventKind::Info, h)),
+                )
+            }
             None => {
                 let mut msg = stderr_text.trim().to_owned();
                 if msg.is_empty() {
@@ -1057,6 +1081,15 @@ mod tests {
             ]
         );
         assert!(parse_line("not json").is_empty());
+    }
+
+    #[test]
+    fn auth_errors_get_a_login_hint() {
+        assert!(auth_hint(
+            "Failed to authenticate: OAuth session expired and could not be refreshed"
+        )
+        .is_some());
+        assert!(auth_hint("Tool failed: permission denied").is_none());
     }
 
     #[test]
