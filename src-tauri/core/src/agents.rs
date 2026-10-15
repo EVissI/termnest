@@ -60,8 +60,13 @@ pub struct AgentEvent {
 pub struct AgentTask {
     pub id: AgentId,
     pub title: String,
-    pub project: String,
-    /// Where the agent works: the project folder or its worktree.
+    /// Linked project; `None` for a plain question.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// A question: the agent answers and must not change anything.
+    #[serde(default)]
+    pub ask: bool,
+    /// Where the agent works: the project folder, its worktree, or an empty folder.
     pub cwd: String,
     #[serde(default)]
     pub worktree: Option<String>,
@@ -94,7 +99,8 @@ pub struct AgentTask {
 pub struct AgentSummary {
     pub id: AgentId,
     pub title: String,
-    pub project: String,
+    pub project: Option<String>,
+    pub ask: bool,
     pub cwd: String,
     pub worktree: Option<String>,
     pub branch: Option<String>,
@@ -116,6 +122,7 @@ impl AgentTask {
             id: self.id.clone(),
             title: self.title.clone(),
             project: self.project.clone(),
+            ask: self.ask,
             cwd: self.cwd.clone(),
             worktree: self.worktree.clone(),
             branch: self.branch.clone(),
@@ -149,7 +156,9 @@ pub struct AgentConfig {
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
     pub title: String,
-    pub project: String,
+    /// `None` (or `ask`) runs a question in an empty folder.
+    pub project: Option<String>,
+    pub ask: bool,
     pub prompt: String,
     pub server: Option<String>,
     pub session: Option<SessionId>,
@@ -502,12 +511,13 @@ impl AgentManager {
         req: AgentRequest,
         cfg: AgentConfig,
     ) -> CoreResult<AgentId> {
-        let project = PathBuf::from(&req.project);
-        if !project.is_dir() {
-            return Err(CoreError::new(
-                ErrorKind::NotFound,
-                format!("Папка проекта не найдена: {}", req.project),
-            ));
+        if let Some(p) = &req.project {
+            if !Path::new(p).is_dir() {
+                return Err(CoreError::new(
+                    ErrorKind::NotFound,
+                    format!("Папка проекта не найдена: {p}"),
+                ));
+            }
         }
         cli_version(&cfg.cli).await?;
 
@@ -516,7 +526,19 @@ impl AgentManager {
             full[full.len() - 8..].to_owned()
         };
         let mut info = None;
-        let (cwd, worktree, branch) = if project.join(".git").exists() {
+        let ask = req.ask || req.project.is_none();
+        let (cwd, worktree, branch) = if ask {
+            // A question needs no code: the agent works in an empty folder of its own.
+            let path = self.dir.join("scratch").join(&id);
+            std::fs::create_dir_all(&path)
+                .map_err(|e| CoreError::storage("Не удалось создать папку агента", e))?;
+            (path.display().to_string(), None, None)
+        } else if let Some(project_s) = req
+            .project
+            .clone()
+            .filter(|p| Path::new(p).join(".git").exists())
+        {
+            let project = PathBuf::from(&project_s);
             let branch = format!("termnest/fix-{id}");
             let path = self.dir.join("worktrees").join(&id);
             let path_s = path.display().to_string();
@@ -532,12 +554,12 @@ impl AgentManager {
                         "Worktree не создан ({}), агент работает прямо в папке проекта",
                         e.message
                     ));
-                    (req.project.clone(), None, None)
+                    (project_s, None, None)
                 }
             }
         } else {
             info = Some("Проект не git-репозиторий: агент работает прямо в папке, параллельно с другими не запускается".into());
-            (req.project.clone(), None, None)
+            (req.project.clone().unwrap_or_default(), None, None)
         };
 
         let created = now();
@@ -545,6 +567,7 @@ impl AgentManager {
             id: id.clone(),
             title: req.title,
             project: req.project,
+            ask,
             cwd,
             worktree,
             branch,
@@ -644,19 +667,15 @@ impl AgentManager {
             ));
         }
         let task = self.get(id)?;
-        let Some(wt) = task.worktree.clone() else {
+        let (Some(wt), Some(project)) = (task.worktree.clone(), task.project.clone()) else {
             return Ok(());
         };
-        git(
-            Path::new(&task.project),
-            &["worktree", "remove", "--force", &wt],
-        )
-        .await?;
+        git(Path::new(&project), &["worktree", "remove", "--force", &wt]).await?;
         self.update(
             id,
             |t| {
                 t.worktree = None;
-                t.cwd = t.project.clone();
+                t.cwd = project.clone();
             },
             Some((
                 EventKind::Info,
@@ -737,9 +756,11 @@ impl AgentManager {
         cmd.arg("-p")
             .args(["--output-format", "stream-json", "--verbose"])
             .arg("--permission-mode")
-            .arg(match cfg.mode {
-                AgentMode::Edit => "acceptEdits",
-                AgentMode::Propose => "plan",
+            .arg(match (task.ask, cfg.mode) {
+                // A question: nothing that needs permission is allowed.
+                (true, _) => "dontAsk",
+                (false, AgentMode::Edit) => "acceptEdits",
+                (false, AgentMode::Propose) => "plan",
             });
         if let Some(sid) = &task.claude_session {
             cmd.arg("--resume").arg(sid);
@@ -917,34 +938,49 @@ pub fn secret_lines(text: &str) -> Vec<String> {
     out
 }
 
-/// Text the agent receives for an error from a terminal.
+/// Text the agent receives for a terminal: an error to fix in a project, or a question.
 pub struct PromptInput<'a> {
     pub server: &'a str,
     pub target: &'a str,
     pub os: Option<&'a str>,
     pub cwd: Option<&'a str>,
+    /// The user's comment (fix) or question (ask).
     pub comment: &'a str,
     pub output: &'a str,
     pub session: Option<SessionId>,
     pub mcp: bool,
     pub mode: AgentMode,
+    /// A question without a project: answer, change nothing.
+    pub ask: bool,
 }
 
 pub fn build_prompt(p: &PromptInput<'_>) -> String {
     let mut s = String::new();
-    s.push_str(&format!(
-        "В терминале на сервере {} ({})",
-        p.server, p.target
-    ));
+    let mut server = format!("{} ({})", p.server, p.target);
     if let Some(os) = p.os.filter(|o| !o.is_empty()) {
-        s.push_str(&format!(", {os}"));
+        server.push_str(&format!(", {os}"));
     }
-    s.push_str(" возникла ошибка. Текущая папка - локальный проект с кодом этого сервиса.\n");
-    if !p.comment.trim().is_empty() {
+    if p.ask {
+        s.push_str(&format!("Вопрос о терминале на сервере {server}.\n"));
+        let question = p.comment.trim();
         s.push_str(&format!(
-            "\nКомментарий пользователя: {}\n",
-            p.comment.trim()
+            "\nВопрос пользователя: {}\n",
+            if question.is_empty() {
+                "что здесь происходит и что с этим делать?"
+            } else {
+                question
+            }
         ));
+    } else {
+        s.push_str(&format!(
+            "В терминале на сервере {server} возникла ошибка. Текущая папка - локальный проект с кодом этого сервиса.\n"
+        ));
+        if !p.comment.trim().is_empty() {
+            s.push_str(&format!(
+                "\nКомментарий пользователя: {}\n",
+                p.comment.trim()
+            ));
+        }
     }
     s.push_str("\nВывод терминала");
     if let Some(cwd) = p.cwd.filter(|c| !c.is_empty()) {
@@ -953,13 +989,17 @@ pub fn build_prompt(p: &PromptInput<'_>) -> String {
     s.push_str(":\n```\n");
     s.push_str(p.output.trim_end());
     s.push_str("\n```\n\n");
-    match p.mode {
-        AgentMode::Edit => s.push_str("Задача: найди причину ошибки в коде проекта и исправь её в файлах проекта."),
-        AgentMode::Propose => {
-            s.push_str("Задача: найди причину ошибки в коде проекта и предложи исправление (diff), файлы не меняй.")
+    if p.ask {
+        s.push_str("Ответь на вопрос, опираясь на вывод терминала. Ничего не меняй и не выполняй на сервере: если нужна команда, просто предложи её.");
+    } else {
+        match p.mode {
+            AgentMode::Edit => s.push_str("Задача: найди причину ошибки в коде проекта и исправь её в файлах проекта."),
+            AgentMode::Propose => {
+                s.push_str("Задача: найди причину ошибки в коде проекта и предложи исправление (diff), файлы не меняй.")
+            }
         }
+        s.push_str(" Ничего не выполняй на сервере.");
     }
-    s.push_str(" Ничего не выполняй на сервере.");
     if p.mcp {
         if let Some(id) = p.session {
             s.push_str(&format!(
@@ -967,7 +1007,10 @@ pub fn build_prompt(p: &PromptInput<'_>) -> String {
             ));
         }
     }
-    s.push_str("\nВ конце кратко опиши причину и что изменено.\n");
+    if !p.ask {
+        s.push_str("\nВ конце кратко опиши причину и что изменено.");
+    }
+    s.push('\n');
     s
 }
 
@@ -1036,6 +1079,7 @@ mod tests {
             session: Some(3),
             mcp: false,
             mode: AgentMode::Edit,
+            ask: false,
         };
         let text = build_prompt(&p);
         assert!(text.contains("(root@web:22), Ubuntu 24.04"));
@@ -1044,6 +1088,13 @@ mod tests {
         assert!(!text.contains("read_output"));
         p.mcp = true;
         assert!(build_prompt(&p).contains("read_output для сессии 3"));
+        p.ask = true;
+        p.comment = "почему nginx не стартует?";
+        let q = build_prompt(&p);
+        assert!(q.starts_with("Вопрос о терминале"));
+        assert!(q.contains("Вопрос пользователя: почему nginx не стартует?"));
+        assert!(q.contains("Ничего не меняй"));
+        assert!(!q.contains("исправь"));
     }
 
     #[test]
@@ -1052,7 +1103,8 @@ mod tests {
         let task = AgentTask {
             id: "t1".into(),
             title: "x".into(),
-            project: "p".into(),
+            project: Some("p".into()),
+            ask: false,
             cwd: "p".into(),
             worktree: None,
             branch: None,

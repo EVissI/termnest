@@ -62,6 +62,7 @@ pub async fn agent_prepare(
     selection: Option<String>,
     cwd: Option<String>,
     comment: String,
+    ask: bool,
 ) -> Result<Prepared, CoreError> {
     let (spec, session, pane_project) = {
         let layout = state.layout();
@@ -113,6 +114,7 @@ pub async fn agent_prepare(
         session,
         mcp,
         mode: settings.agent_mode,
+        ask: ask || project.is_none(),
     });
     let title = output
         .lines()
@@ -135,7 +137,8 @@ pub async fn agent_prepare(
 pub async fn agent_start(
     state: AppStateRef<'_>,
     pane: PaneId,
-    project: String,
+    project: Option<String>,
+    ask: bool,
     title: String,
     prompt: String,
 ) -> Result<AgentId, CoreError> {
@@ -154,6 +157,7 @@ pub async fn agent_start(
             AgentRequest {
                 title: title.trim().to_owned(),
                 project,
+                ask,
                 prompt,
                 server,
                 session,

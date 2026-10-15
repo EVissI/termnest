@@ -14,7 +14,8 @@
     stopped: 'остановлен',
   };
 
-  function folder(path: string): string {
+  function folder(path: string | null): string {
+    if (!path) return 'вопрос';
     const parts = path.split(/[\\/]/).filter(Boolean);
     return parts[parts.length - 1] ?? path;
   }

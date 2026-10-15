@@ -276,7 +276,8 @@ export interface AgentEvent {
 export interface AgentSummary {
   id: string;
   title: string;
-  project: string;
+  project: string | null;
+  ask: boolean;
   cwd: string;
   worktree: string | null;
   branch: string | null;
@@ -410,10 +411,10 @@ export const api = {
   mcpSelectionReply: (id: number, text: string) => invoke<void>('mcp_selection_reply', { id, text }),
 
   // agents
-  agentPrepare: (pane: PaneId, selection: string | null, cwd: string | null, comment: string) =>
-    invoke<AgentPrepared>('agent_prepare', { pane, selection, cwd, comment }),
-  agentStart: (pane: PaneId, project: string, title: string, prompt: string) =>
-    invoke<string>('agent_start', { pane, project, title, prompt }),
+  agentPrepare: (pane: PaneId, selection: string | null, cwd: string | null, comment: string, ask: boolean) =>
+    invoke<AgentPrepared>('agent_prepare', { pane, selection, cwd, comment, ask }),
+  agentStart: (pane: PaneId, project: string | null, ask: boolean, title: string, prompt: string) =>
+    invoke<string>('agent_start', { pane, project, ask, title, prompt }),
   agentList: () => invoke<AgentSummary[]>('agent_list'),
   agentGet: (id: string) => invoke<AgentTask>('agent_get', { id }),
   agentFollowUp: (id: string, text: string) => invoke<void>('agent_follow_up', { id, text }),

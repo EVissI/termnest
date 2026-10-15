@@ -125,7 +125,7 @@
   {#if summary}
     <div class="meta">
       <span class="state {summary.state}">{summary.state === 'running' ? 'работает' : summary.state === 'queued' ? 'в очереди' : summary.state === 'done' ? 'готово' : summary.state === 'failed' ? 'ошибка' : 'остановлен'}</span>
-      <span class="mono hint" title={summary.cwd}>{summary.cwd}</span>
+      {#if summary.ask}<span class="hint">вопрос, без проекта</span>{:else}<span class="mono hint" title={summary.cwd}>{summary.cwd}</span>{/if}
       {#if summary.branch}<span class="hint">ветка <span class="mono">{summary.branch}</span></span>{/if}
       {#if summary.cost_usd}<span class="hint">${summary.cost_usd.toFixed(3)}</span>{/if}
     </div>
@@ -178,9 +178,11 @@
     {#if running}
       <button class="btn danger" type="button" onclick={() => api.agentStop(id)}><Icon name="stop" size={13} /> Остановить</button>
     {/if}
-    <button class="btn" type="button" onclick={() => attempt(() => api.agentOpenFolder(id))}>Открыть папку</button>
-    <button class="btn" type="button" onclick={showDiff}>{diff === null ? 'Показать diff' : 'Скрыть diff'}</button>
-    {#if !running && summary?.state === 'done'}
+    {#if !summary?.ask}
+      <button class="btn" type="button" onclick={() => attempt(() => api.agentOpenFolder(id))}>Открыть папку</button>
+      <button class="btn" type="button" onclick={showDiff}>{diff === null ? 'Показать diff' : 'Скрыть diff'}</button>
+    {/if}
+    {#if !running && summary?.state === 'done' && !summary?.ask}
       <button class="btn" type="button" onclick={() => (deploying = !deploying)}>Выложить...</button>
     {/if}
     {#if summary?.worktree && !running}
