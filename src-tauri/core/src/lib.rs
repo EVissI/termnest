@@ -12,6 +12,7 @@ pub mod keydeploy;
 pub mod keys;
 pub mod layout;
 pub mod paths;
+pub mod project;
 pub mod prompt;
 pub mod secret;
 pub mod session;

@@ -49,6 +49,7 @@ export interface Pane {
   spec: ConnectSpec | null;
   session: SessionId | null;
   held: boolean;
+  project?: string | null;
 }
 
 export type Direction = 'horizontal' | 'vertical';
@@ -91,11 +92,20 @@ export interface Host {
   key_path?: string | null;
   group?: string | null;
   note: string;
+  project?: string | null;
 }
 
 export interface Group {
   name: string;
   collapsed: boolean;
+  project?: string | null;
+}
+
+export interface ProjectInfo {
+  path: string;
+  name: string;
+  exists: boolean;
+  is_git: boolean;
 }
 
 export interface HostsFile {
@@ -300,6 +310,10 @@ export const api = {
   groupDelete: (name: string) => invoke<void>('group_delete', { name }),
   groupSetCollapsed: (name: string, collapsed: boolean) => invoke<void>('group_set_collapsed', { name, collapsed }),
   importSshConfig: () => invoke<number>('hosts_import_ssh_config'),
+  hostSetProject: (id: string, project: string | null) => invoke<void>('host_set_project', { id, project }),
+  groupSetProject: (name: string, project: string | null) => invoke<void>('group_set_project', { name, project }),
+  projectInfo: (path: string) => invoke<ProjectInfo>('project_info', { path }),
+  paneSetProject: (pane: PaneId, project: string | null) => invoke<void>('pane_set_project', { pane, project }),
 
   // keys
   keys: () => invoke<KeyInfo[]>('keys_list'),

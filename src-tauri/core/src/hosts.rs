@@ -30,6 +30,9 @@ pub struct Host {
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Local project folder this server belongs to (Claude Code integration).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 impl Host {
@@ -56,6 +59,7 @@ impl Host {
             .take()
             .map(|g| g.trim().to_owned())
             .filter(|g| !g.is_empty());
+        self.project = crate::project::normalize(self.project.take());
         if self.host.is_empty() || self.host.chars().any(char::is_whitespace) {
             return Err(CoreError::invalid("Укажите адрес сервера без пробелов"));
         }
@@ -77,6 +81,9 @@ pub struct Group {
     pub name: String,
     #[serde(default)]
     pub collapsed: bool,
+    /// Default project for the group's servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +149,7 @@ impl HostStore {
                     next.groups.push(Group {
                         name: g.clone(),
                         collapsed: false,
+                        project: None,
                     });
                 }
             }
@@ -218,6 +226,7 @@ impl HostStore {
                 data.groups.push(Group {
                     name,
                     collapsed: false,
+                    project: None,
                 });
             }
             Ok(())
@@ -261,6 +270,34 @@ impl HostStore {
         })
     }
 
+    /// Links a server to a project folder (`None` unlinks).
+    pub fn set_host_project(&self, id: &str, project: Option<String>) -> CoreResult<Host> {
+        let project = crate::project::normalize(project);
+        self.modify(|data| {
+            let host = data
+                .hosts
+                .iter_mut()
+                .find(|h| h.id == id)
+                .ok_or_else(|| CoreError::new(ErrorKind::NotFound, "Сервер не найден"))?;
+            host.project = project;
+            Ok(host.clone())
+        })
+    }
+
+    /// Sets the default project of a group (`None` unlinks).
+    pub fn set_group_project(&self, name: &str, project: Option<String>) -> CoreResult<()> {
+        let project = crate::project::normalize(project);
+        self.modify(|data| {
+            let group = data
+                .groups
+                .iter_mut()
+                .find(|g| g.name == name)
+                .ok_or_else(|| CoreError::new(ErrorKind::NotFound, "Группа не найдена"))?;
+            group.project = project;
+            Ok(())
+        })
+    }
+
     pub fn set_group_collapsed(&self, name: &str, collapsed: bool) -> CoreResult<()> {
         self.modify(|data| {
             for g in data.groups.iter_mut().filter(|g| g.name == name) {
@@ -299,6 +336,7 @@ impl HostStore {
                     key_path: e.identity_file.clone(),
                     group: Some(group.to_owned()),
                     note: String::new(),
+                    project: None,
                 });
                 added += 1;
             }
@@ -322,6 +360,7 @@ mod tests {
             key_path: Some(" ".into()),
             group: Some("prod".into()),
             note: String::new(),
+            project: None,
         }
     }
 
@@ -348,7 +387,8 @@ mod tests {
             reloaded.groups,
             vec![Group {
                 name: "prod".into(),
-                collapsed: false
+                collapsed: false,
+                project: None,
             }]
         );
 

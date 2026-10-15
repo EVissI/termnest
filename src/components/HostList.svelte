@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Host } from '../lib/ipc';
   import { attempt, openSource } from '../lib/actions';
+  import { linkGroup, linkHost } from '../lib/projects';
   import { askText, confirmDialog, store, toast, ui } from '../stores/app.svelte';
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
   import Icon from './Icon.svelte';
@@ -66,6 +67,8 @@
         { label: 'Редактировать', action: () => (ui.hostDialog = { ...h }) },
         { label: 'Дублировать', action: () => attempt(() => api.hostDuplicate(h.id)) },
         { label: 'Установить ключ на сервер...', action: () => (ui.deploy = { hostId: h.id }) },
+        { label: h.project ? 'Сменить проект...' : 'Привязать к проекту...', action: () => linkHost(h.id) },
+        ...(h.project ? [{ label: 'Отвязать от проекта', action: () => attempt(() => api.hostSetProject(h.id, null)) }] : []),
         { separator: true, label: '' },
         { label: 'Удалить', danger: true, action: () => remove(h) },
       ],
@@ -95,6 +98,10 @@
       items: [
         { label: 'Добавить сервер в группу', action: () => (ui.hostDialog = blankHost(name)) },
         { label: 'Переименовать', action: () => renameGroup(name) },
+        { label: 'Проект группы...', action: () => linkGroup(name) },
+        ...(store.hosts.groups.find((g) => g.name === name)?.project
+          ? [{ label: 'Отвязать проект группы', action: () => attempt(() => api.groupSetProject(name, null)) }]
+          : []),
         { label: 'Удалить группу', danger: true, action: () => deleteGroup(name) },
       ],
     };

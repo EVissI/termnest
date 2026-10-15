@@ -30,6 +30,9 @@ pub struct Pane {
     /// Live session. Not persisted.
     #[serde(default, skip_deserializing)]
     pub session: Option<SessionId>,
+    /// Project override for this panel (takes precedence over the server's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Restored panel waiting for the user to allow reconnecting. Not persisted.
     #[serde(default, skip_deserializing)]
     pub held: bool,
@@ -86,6 +89,7 @@ impl Node {
                         spec: None,
                         session: None,
                         held: false,
+                        project: None,
                     }),
                 );
                 *self = f(old);
@@ -374,6 +378,7 @@ impl Layout {
                 spec,
                 session: None,
                 held: false,
+                project: None,
             }),
             focused: pane_id,
         };
@@ -405,6 +410,7 @@ impl Layout {
                 spec: spec.take().flatten(),
                 session: None,
                 held: false,
+                project: None,
             })),
         });
         tab.focused = new_id;
@@ -413,6 +419,11 @@ impl Layout {
 
     pub fn set_session(&mut self, pane: PaneId, session: Option<SessionId>) -> CoreResult<()> {
         self.pane_mut(pane)?.session = session;
+        Ok(())
+    }
+
+    pub fn set_pane_project(&mut self, pane: PaneId, project: Option<String>) -> CoreResult<()> {
+        self.pane_mut(pane)?.project = crate::project::normalize(project);
         Ok(())
     }
 
@@ -470,6 +481,7 @@ impl Layout {
                 spec: None,
                 session: None,
                 held: false,
+                project: None,
             }),
         );
         let mut removed = Removed {
@@ -784,6 +796,8 @@ mod tests {
         let mut l = layout();
         let (_, p) = l.new_tab("main", spec("a"), None).unwrap();
         l.set_session(p, Some(5)).unwrap();
+        l.set_pane_project(p, Some(" D:\\work\\app\\ ".into()))
+            .unwrap();
         l.set_bounds(
             "main",
             Bounds {
@@ -799,6 +813,10 @@ mod tests {
         let mut loaded = file.load().unwrap();
         assert_eq!(loaded.pane(p).unwrap().session, None);
         assert_eq!(loaded.pane(p).unwrap().spec, spec("a"));
+        assert_eq!(
+            loaded.pane(p).unwrap().project.as_deref(),
+            Some("D:\\work\\app")
+        );
         assert_eq!(loaded.window("main").unwrap().bounds.unwrap().width, 800);
         let (t2, p2) = loaded.new_tab("main", None, None).unwrap();
         assert!(t2 > p && p2 > t2, "ids continue after the loaded ones");

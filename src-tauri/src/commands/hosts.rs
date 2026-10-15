@@ -79,3 +79,33 @@ pub fn hosts_import_ssh_config(state: AppStateRef<'_>) -> Result<usize, CoreErro
     state.hosts_changed();
     Ok(added)
 }
+
+/// Links a server to a local project folder (`None` unlinks).
+#[tauri::command]
+pub fn host_set_project(
+    state: AppStateRef<'_>,
+    id: String,
+    project: Option<String>,
+) -> Result<(), CoreError> {
+    state.hosts.set_host_project(&id, project)?;
+    state.hosts_changed();
+    Ok(())
+}
+
+/// Sets the default project of a group (`None` unlinks).
+#[tauri::command]
+pub fn group_set_project(
+    state: AppStateRef<'_>,
+    name: String,
+    project: Option<String>,
+) -> Result<(), CoreError> {
+    state.hosts.set_group_project(&name, project)?;
+    state.hosts_changed();
+    Ok(())
+}
+
+/// Whether a project folder exists and is a git repository.
+#[tauri::command]
+pub fn project_info(path: String) -> termnest_core::project::ProjectInfo {
+    termnest_core::project::info(&path)
+}

@@ -542,3 +542,13 @@ pub fn restore_windows(app: &AppHandle, state: &AppState) -> CoreResult<()> {
     }
     Ok(())
 }
+
+/// Project override for one panel (kept in layout.json, not in hosts.toml).
+#[tauri::command]
+pub fn pane_set_project(
+    state: AppStateRef<'_>,
+    pane: PaneId,
+    project: Option<String>,
+) -> Result<(), CoreError> {
+    state.mutate_layout(|l| l.set_pane_project(pane, project))
+}

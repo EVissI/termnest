@@ -7,6 +7,8 @@
   import StatusIndicator from './StatusIndicator.svelte';
   import PanePicker from './PanePicker.svelte';
   import Icon from './Icon.svelte';
+  import ContextMenu, { type MenuItem } from './ContextMenu.svelte';
+  import { effectiveProject, linkHost, linkPane } from '../lib/projects';
 
   let { pane, visible, focused }: { pane: Pane; visible: boolean; focused: boolean } = $props();
 
@@ -124,6 +126,30 @@
     status?.retry_in_ms != null ? Math.max(0, Math.ceil((status.retry_in_ms - (now - reconnectSince)) / 1000)) : null,
   );
 
+  const project = $derived(effectiveProject(pane));
+  const projectSourceLabel = { pane: 'только эта панель', host: 'от сервера', group: 'от группы' } as const;
+  let projectMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  function openProjectMenu(e: MouseEvent): void {
+    e.stopPropagation();
+    const hostId = pane.spec?.host_id;
+    const host = hostId ? store.hosts.hosts.find((h) => h.id === hostId) : undefined;
+    const items: MenuItem[] = [];
+    if (project) items.push({ label: project.path, disabled: true }, { separator: true, label: '' });
+    items.push({ label: 'Привязать эту панель к проекту...', action: () => linkPane(pane) });
+    if (pane.project) {
+      items.push({ label: 'Отвязать панель', action: () => attempt(() => api.paneSetProject(pane.id, null)) });
+    }
+    if (host) {
+      items.push({ separator: true, label: '' });
+      items.push({ label: `Привязать сервер «${host.name}» к проекту...`, action: () => linkHost(host.id) });
+      if (host.project) {
+        items.push({ label: 'Отвязать сервер', action: () => attempt(() => api.hostSetProject(host.id, null)) });
+      }
+    }
+    projectMenu = { x: e.clientX, y: e.clientY, items };
+  }
+
   function splitThis(direction: 'horizontal' | 'vertical'): void {
     const source = pane.spec ? ({ kind: 'pane', pane: pane.id } as const) : ({ kind: 'empty' } as const);
     void attempt(() => api.paneSplit(pane.id, direction, source));
@@ -186,7 +212,23 @@
     />
     <StatusIndicator state={indicator} label={false} />
     <span class="label" title={pane.spec ? `${pane.spec.user}@${pane.spec.host}:${pane.spec.port}` : ''}>{label}</span>
+    {#if project}
+      <button
+        class="project"
+        type="button"
+        title="Проект: {project.path} ({projectSourceLabel[project.source]})"
+        onclick={(e) => openProjectMenu(e)}
+      >
+        <Icon name="folder" size={11} />
+        <span>{project.name}</span>
+      </button>
+    {/if}
     <span class="spacer"></span>
+    {#if !project && pane.spec}
+      <button class="icon" type="button" title="Привязать к проекту" onclick={(e) => openProjectMenu(e)}>
+        <Icon name="link" size={13} />
+      </button>
+    {/if}
     <button class="icon" type="button" title="Сплит вправо" onclick={() => splitThis('horizontal')}>
       <Icon name="split-h" size={13} />
     </button>
@@ -255,6 +297,10 @@
   </div>
 </div>
 
+{#if projectMenu}
+  <ContextMenu x={projectMenu.x} y={projectMenu.y} items={projectMenu.items} onclose={() => (projectMenu = null)} />
+{/if}
+
 <style>
   .pane {
     position: absolute;
@@ -287,6 +333,30 @@
   }
   .select {
     margin: 0;
+  }
+  .project {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 40%;
+    padding: 0 6px;
+    height: 18px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg-input);
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .project span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .project:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
   .label {
     overflow: hidden;
