@@ -3,6 +3,7 @@
   import HostList from './HostList.svelte';
   import SnippetsView from './SnippetsView.svelte';
   import KeysView from './KeysView.svelte';
+  import AgentsView from './AgentsView.svelte';
   import Icon from './Icon.svelte';
 
   const visible = $derived(store.settings?.sidebar_visible ?? true);
@@ -27,6 +28,9 @@
   <button class="icon" class:active={visible && ui.sidebarSection === 'keys'} type="button" title="Ключи" onclick={() => select('keys')}>
     <Icon name="key" size={18} />
   </button>
+  <button class="icon" class:active={visible && ui.sidebarSection === 'agents'} type="button" title="Агенты Claude" onclick={() => select('agents')}>
+    <Icon name="agent" size={18} />
+  </button>
   <span class="spacer"></span>
   <button class="icon" type="button" title="Настройки" onclick={() => (ui.settingsOpen = true)}>
     <Icon name="settings" size={18} />
@@ -39,6 +43,8 @@
       <HostList />
     {:else if ui.sidebarSection === 'snippets'}
       <SnippetsView />
+    {:else if ui.sidebarSection === 'agents'}
+      <AgentsView />
     {:else}
       <KeysView />
     {/if}

@@ -164,6 +164,9 @@ export async function runAction(action: HotkeyAction): Promise<void> {
     case 'sftp.toggle':
       ui.sftpOpen = !ui.sftpOpen;
       return;
+    case 'agent.send':
+      if (pane?.spec) ui.sendToAgent = pane.id;
+      return;
     case 'sidebar.toggle':
       if (store.settings) await saveSettings({ sidebar_visible: !store.settings.sidebar_visible });
       return;

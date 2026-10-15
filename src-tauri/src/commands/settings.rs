@@ -16,6 +16,7 @@ pub fn settings_set(state: AppStateRef<'_>, settings: Settings) -> Result<Settin
     let before = state.settings().claude;
     let saved = state.settings.set(settings)?;
     state.ctx.set_keepalive_secs(saved.keepalive_secs);
+    state.agents.set_limit(saved.claude.max_agents as usize);
     state.emit(SETTINGS_CHANGED_EVENT, saved.clone());
     // Restart the MCP server only when its own settings changed.
     if before.mcp_enabled != saved.claude.mcp_enabled || before.mcp_port != saved.claude.mcp_port {

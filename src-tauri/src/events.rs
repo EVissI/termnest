@@ -27,3 +27,24 @@ impl TransferSink for TauriTransferSink {
         let _ = self.0.emit(TRANSFER_EVENT, status);
     }
 }
+
+pub const AGENT_EVENT: &str = "agents://update";
+
+#[derive(Clone, serde::Serialize)]
+struct AgentUpdate<'a> {
+    task: &'a termnest_core::agents::AgentSummary,
+    event: Option<&'a termnest_core::agents::AgentEvent>,
+}
+
+/// Forwards agent task changes as `agents://update`.
+pub struct TauriAgentSink(pub AppHandle);
+
+impl termnest_core::agents::AgentSink for TauriAgentSink {
+    fn agent_changed(
+        &self,
+        task: &termnest_core::agents::AgentSummary,
+        event: Option<&termnest_core::agents::AgentEvent>,
+    ) {
+        let _ = self.0.emit(AGENT_EVENT, AgentUpdate { task, event });
+    }
+}

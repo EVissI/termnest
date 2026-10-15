@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
-use crate::commands::{hosts, keys, layout, session, settings, sftp, snippets};
+use crate::commands::{agents, hosts, keys, layout, session, settings, sftp, snippets};
 use crate::state::AppState;
 
 fn main() {
@@ -98,6 +98,17 @@ fn main() {
             settings::mcp_regenerate_token,
             settings::mcp_journal,
             settings::mcp_selection_reply,
+            agents::agent_prepare,
+            agents::agent_start,
+            agents::agent_list,
+            agents::agent_get,
+            agents::agent_follow_up,
+            agents::agent_stop,
+            agents::agent_delete,
+            agents::agent_diff,
+            agents::agent_remove_worktree,
+            agents::agent_open_folder,
+            agents::claude_cli_check,
             snippets::snippets_list,
             snippets::snippets_upsert,
             snippets::snippets_delete,

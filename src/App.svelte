@@ -20,6 +20,8 @@
   import TextPromptDialog from './components/TextPromptDialog.svelte';
   import WindowDialogs from './components/WindowDialogs.svelte';
   import Toasts from './components/Toasts.svelte';
+  import SendToAgentDialog from './components/SendToAgentDialog.svelte';
+  import AgentDialog from './components/AgentDialog.svelte';
 
   let ready = $state(false);
   let fatal = $state('');
@@ -37,6 +39,8 @@
       !!ui.snippetEdit ||
       !!ui.closeRequest ||
       !!ui.hostKeyChanged ||
+      ui.sendToAgent !== null ||
+      ui.agentOpen !== null ||
       store.prompts.length > 0,
   );
 
@@ -129,6 +133,8 @@
   {#if ui.snippetEdit}<SnippetDialog snippet={ui.snippetEdit} />{/if}
   {#if ui.palette}<SnippetPalette />{/if}
   {#if ui.settingsOpen}<SettingsDialog />{/if}
+  {#if ui.sendToAgent !== null}<SendToAgentDialog paneId={ui.sendToAgent} />{/if}
+  {#if ui.agentOpen !== null}<AgentDialog id={ui.agentOpen} />{/if}
   <WindowDialogs />
   <PromptDialog />
   <TextPromptDialog />

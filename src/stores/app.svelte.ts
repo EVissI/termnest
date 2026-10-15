@@ -13,6 +13,8 @@ import {
   type Settings,
   type Snippet,
   type TransferStatus,
+  type AgentEvent,
+  type AgentSummary,
   type WindowState,
   type Host,
 } from '../lib/ipc';
@@ -31,6 +33,7 @@ export const store = $state({
   transfers: {} as Record<number, TransferStatus>,
   keys: [] as KeyInfo[],
   prompts: [] as PendingPrompt[],
+  agents: {} as Record<string, AgentSummary>,
 });
 
 export interface ConfirmRequest {
@@ -61,7 +64,7 @@ export interface DeployRequest {
 }
 
 export const ui = $state({
-  sidebarSection: 'hosts' as 'hosts' | 'snippets' | 'keys',
+  sidebarSection: 'hosts' as 'hosts' | 'snippets' | 'keys' | 'agents',
   sftpOpen: false,
   broadcast: false,
   /** Panels selected for broadcast and snippet sending. */
@@ -80,6 +83,10 @@ export const ui = $state({
   textPrompt: null as TextPromptRequest | null,
   closeRequest: null as { sessions: number; other_windows: boolean } | null,
   hostKeyChanged: null as { info: HostKeyInfo; session: SessionId } | null,
+  /** Panel whose error is being sent to Claude. */
+  sendToAgent: null as PaneId | null,
+  /** Agent task shown in the details dialog. */
+  agentOpen: null as string | null,
   searchPane: null as PaneId | null,
   toasts: [] as Toast[],
 });
@@ -90,6 +97,15 @@ export const terminals = new Map<PaneId, TerminalView>();
 /** Working directory reported by each session's shell (not reactive on purpose). */
 // eslint-disable-next-line svelte/prefer-svelte-reactivity
 export const sessionCwd = new Map<SessionId, string>();
+
+/** Live agent events for an open details dialog. */
+type AgentListener = (id: string, event: AgentEvent) => void;
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
+const agentListeners = new Set<AgentListener>();
+export function onAgentEvent(fn: AgentListener): () => void {
+  agentListeners.add(fn);
+  return () => agentListeners.delete(fn);
+}
 
 export function myWindow(): WindowState | undefined {
   return store.layout.windows.find((w) => w.label === windowLabel);
@@ -155,6 +171,10 @@ export async function initStore(): Promise<void> {
       store.prompts = store.prompts.filter((p) => p.id !== id);
     }),
     on<{ sessions: number; other_windows: boolean }>('window://close-requested', (r) => (ui.closeRequest = r)),
+    on<{ task: AgentSummary; event: AgentEvent | null }>('agents://update', (u) => {
+      store.agents[u.task.id] = u.task;
+      if (u.event) for (const fn of agentListeners) fn(u.task.id, u.event);
+    }),
     on<number>('mcp://selection-request', (id) => {
       // Answer with the selection of this window's focused panel (empty answers are ignored).
       const w = myWindow();
@@ -174,6 +194,7 @@ export async function initStore(): Promise<void> {
     api.promptPending(),
     api.keys(),
   ]);
+  for (const a of await api.agentList()) store.agents[a.id] = a;
   store.layout = layout;
   applySettings(settings);
   store.hosts = hosts;

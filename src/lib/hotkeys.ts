@@ -19,6 +19,7 @@ export const hotkeyActions = [
   { id: 'broadcast.toggle', label: 'Режим broadcast', combo: 'Ctrl+Shift+B' },
   { id: 'sftp.toggle', label: 'Панель SFTP', combo: 'Ctrl+Shift+S' },
   { id: 'sidebar.toggle', label: 'Боковая панель', combo: 'Ctrl+Shift+E' },
+  { id: 'agent.send', label: 'Отправить ошибку на фикс в Claude', combo: 'Ctrl+Shift+A' },
 ] as const;
 
 export type HotkeyAction = (typeof hotkeyActions)[number]['id'];

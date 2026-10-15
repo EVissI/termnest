@@ -4,6 +4,7 @@
 //! This crate intentionally has no dependency on Tauri, so it can be built and tested
 //! on any platform (including the Linux build container).
 
+pub mod agents;
 pub mod error;
 pub mod hostkeys;
 pub mod hosts;

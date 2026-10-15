@@ -229,6 +229,11 @@
         <Icon name="link" size={13} />
       </button>
     {/if}
+    {#if pane.spec}
+      <button class="icon" type="button" title="Отправить на фикс в Claude (Ctrl+Shift+A)" onclick={() => (ui.sendToAgent = pane.id)}>
+        <Icon name="agent" size={13} />
+      </button>
+    {/if}
     <button class="icon" type="button" title="Сплит вправо" onclick={() => splitThis('horizontal')}>
       <Icon name="split-h" size={13} />
     </button>

@@ -34,6 +34,7 @@ pub struct AppState {
     pub deploys: DeployManager,
     pub transfers: Arc<TransferManager>,
     pub mcp: crate::mcp::McpHub,
+    pub agents: Arc<termnest_core::agents::AgentManager>,
     layout: Mutex<Layout>,
     layout_file: LayoutFile,
     save_tx: mpsc::UnboundedSender<()>,
@@ -109,10 +110,18 @@ impl AppState {
             ctx.clone(),
             runtime.clone(),
         ));
+        let runtime_handle = runtime.clone();
         let transfers = TransferManager::new(
             Arc::new(TauriTransferSink(app.clone())),
             prompts.clone(),
             runtime,
+        );
+
+        let agents = termnest_core::agents::AgentManager::load(
+            dir.join("agents"),
+            settings.get().claude.max_agents as usize,
+            Arc::new(events::TauriAgentSink(app.clone())),
+            runtime_handle.clone(),
         );
 
         let (save_tx, save_rx) = mpsc::unbounded_channel();
@@ -130,6 +139,7 @@ impl AppState {
             deploys: DeployManager::default(),
             transfers,
             mcp: crate::mcp::McpHub::default(),
+            agents,
             layout: Mutex::new(Layout::default()),
             save_tx,
             closing: Mutex::new(HashSet::new()),

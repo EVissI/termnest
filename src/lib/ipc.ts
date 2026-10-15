@@ -228,7 +228,8 @@ export interface TransferStatus {
 export type PromptRequest =
   | { kind: 'host_key_unknown'; host: string; port: number; key_type: string; fingerprint: string }
   | { kind: 'passphrase'; key_path: string; retry: boolean }
-  | { kind: 'file_conflict'; name: string; remote: boolean };
+  | { kind: 'file_conflict'; name: string; remote: boolean }
+  | { kind: 'agent_action'; server: string; session: number; action: 'exec' | 'input'; command: string };
 
 export interface PendingPrompt {
   id: number;
@@ -240,6 +241,7 @@ export type ConflictAction = 'replace' | 'skip' | 'rename';
 export type PromptReply =
   | { kind: 'cancel' }
   | { kind: 'confirm' }
+  | { kind: 'confirm_session' }
   | { kind: 'passphrase'; value: string; remember: boolean }
   | { kind: 'conflict'; action: ConflictAction; apply_to_all: boolean };
 
@@ -260,6 +262,48 @@ export interface KnownHost {
   port: number;
   key_type: string;
   fingerprint: string;
+}
+
+export type AgentState = 'queued' | 'running' | 'done' | 'failed' | 'stopped';
+export type AgentEventKind = 'prompt' | 'text' | 'tool' | 'tool_error' | 'result' | 'error' | 'info';
+
+export interface AgentEvent {
+  time: number;
+  kind: AgentEventKind;
+  text: string;
+}
+
+export interface AgentSummary {
+  id: string;
+  title: string;
+  project: string;
+  cwd: string;
+  worktree: string | null;
+  branch: string | null;
+  server: string | null;
+  session: SessionId | null;
+  state: AgentState;
+  created: number;
+  updated: number;
+  files: string[];
+  result: string | null;
+  error: string | null;
+  cost_usd: number | null;
+  can_continue: boolean;
+}
+
+export interface AgentTask extends Omit<AgentSummary, 'can_continue'> {
+  claude_session: string | null;
+  events: AgentEvent[];
+}
+
+export interface AgentPrepared {
+  project: ProjectInfo | null;
+  server: string;
+  title: string;
+  prompt: string;
+  secrets: string[];
+  mcp: boolean;
 }
 
 // ---- Helpers ----------------------------------------------------------------------------
@@ -364,6 +408,21 @@ export const api = {
   mcpRegenerateToken: () => invoke<McpStatus>('mcp_regenerate_token'),
   mcpJournal: () => invoke<McpLogEntry[]>('mcp_journal'),
   mcpSelectionReply: (id: number, text: string) => invoke<void>('mcp_selection_reply', { id, text }),
+
+  // agents
+  agentPrepare: (pane: PaneId, selection: string | null, cwd: string | null, comment: string) =>
+    invoke<AgentPrepared>('agent_prepare', { pane, selection, cwd, comment }),
+  agentStart: (pane: PaneId, project: string, title: string, prompt: string) =>
+    invoke<string>('agent_start', { pane, project, title, prompt }),
+  agentList: () => invoke<AgentSummary[]>('agent_list'),
+  agentGet: (id: string) => invoke<AgentTask>('agent_get', { id }),
+  agentFollowUp: (id: string, text: string) => invoke<void>('agent_follow_up', { id, text }),
+  agentStop: (id: string) => invoke<void>('agent_stop', { id }),
+  agentDelete: (id: string) => invoke<void>('agent_delete', { id }),
+  agentDiff: (id: string) => invoke<string>('agent_diff', { id }),
+  agentRemoveWorktree: (id: string) => invoke<void>('agent_remove_worktree', { id }),
+  agentOpenFolder: (id: string) => invoke<void>('agent_open_folder', { id }),
+  claudeCliCheck: () => invoke<string>('claude_cli_check'),
 
   // snippets
   snippets: () => invoke<Snippet[]>('snippets_list'),
