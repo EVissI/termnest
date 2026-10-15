@@ -55,6 +55,13 @@
     toast('Команда скопирована: выполните её в терминале Windows', 'ok', 4000);
   }
 
+  const removeCommand = 'claude mcp remove termnest -s user';
+
+  async function copyRemove(): Promise<void> {
+    await writeText(removeCommand);
+    toast('Команда удаления скопирована: выполните её, затем команду подключения', 'ok', 4000);
+  }
+
   async function regenerate(): Promise<void> {
     const ok = await confirmDialog({
       title: 'Новый токен',
@@ -104,6 +111,14 @@
       <button class="btn" type="button" onclick={copyCommand}>Скопировать команду</button>
       <button class="btn" type="button" onclick={() => (showToken = !showToken)}>{showToken ? 'Скрыть' : 'Показать'} токен</button>
       <button class="btn" type="button" onclick={regenerate}>Новый токен</button>
+    </div>
+  </div>
+  <div class="field">
+    <span>Сброс подключения (если Claude Code пишет «already exists» или ошибку авторизации после смены токена)</span>
+    <div class="cmd mono">{removeCommand}</div>
+    <div class="row">
+      <button class="btn" type="button" onclick={copyRemove}>Скопировать команду удаления</button>
+      <span class="hint">После неё выполните команду подключения выше.</span>
     </div>
   </div>
 {/if}
