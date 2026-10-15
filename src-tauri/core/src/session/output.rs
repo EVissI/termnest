@@ -58,6 +58,12 @@ impl OutputHub {
         id
     }
 
+    /// The last `max` bytes of buffered output.
+    pub(crate) fn tail(&self, max: usize) -> Vec<u8> {
+        let skip = self.buffer.len().saturating_sub(max);
+        self.buffer.iter().skip(skip).copied().collect()
+    }
+
     pub(crate) fn unsubscribe(&mut self, id: u64) {
         self.subscribers.retain(|(sid, _)| *sid != id);
     }

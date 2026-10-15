@@ -2,6 +2,7 @@
 
 mod commands;
 mod events;
+mod mcp;
 mod prompts;
 mod state;
 mod windows;
@@ -23,6 +24,11 @@ fn main() {
             let state = AppState::init(&handle).map_err(|e| e.message)?;
             app.manage(state.clone());
             layout::restore_windows(&handle, &state).map_err(|e| e.message)?;
+            let mcp_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                let settings = mcp_state.settings();
+                mcp_state.mcp.apply(&mcp_state, &settings).await;
+            });
             Ok(())
         })
         .on_window_event(windows::handle_window_event)
@@ -88,6 +94,10 @@ fn main() {
             settings::settings_set,
             settings::app_info,
             settings::passphrases_clear,
+            settings::mcp_status,
+            settings::mcp_regenerate_token,
+            settings::mcp_journal,
+            settings::mcp_selection_reply,
             snippets::snippets_list,
             snippets::snippets_upsert,
             snippets::snippets_delete,

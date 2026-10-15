@@ -236,6 +236,15 @@ impl SessionManager {
         Ok(lock(&self.get(id)?.output).subscribe(sink))
     }
 
+    /// Recent output as plain text (escape sequences removed), at most `lines` lines.
+    pub fn recent_output(&self, id: SessionId, lines: usize) -> CoreResult<String> {
+        let raw = lock(&self.get(id)?.output).tail(OUTPUT_BUFFER_BYTES);
+        Ok(crate::textutil::tail_lines(
+            &crate::textutil::plain_text(&raw),
+            lines,
+        ))
+    }
+
     pub fn unsubscribe(&self, id: SessionId, subscription: u64) {
         if let Ok(entry) = self.get(id) {
             lock(&entry.output).unsubscribe(subscription);

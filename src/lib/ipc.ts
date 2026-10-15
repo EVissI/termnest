@@ -132,6 +132,33 @@ export interface Settings {
   extra_keys: string[];
   hotkeys: Record<string, string>;
   sidebar_visible: boolean;
+  claude: ClaudeSettings;
+}
+
+export interface ClaudeSettings {
+  mcp_enabled: boolean;
+  mcp_port: number;
+  agent_mode: 'propose' | 'edit';
+  context_lines: number;
+  max_agents: number;
+  cli_path: string | null;
+  notice_accepted: boolean;
+}
+
+export interface McpStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  token: string;
+  add_command: string;
+  error: string | null;
+}
+
+export interface McpLogEntry {
+  time: number;
+  tool: string;
+  session: number | null;
+  ok: boolean;
 }
 
 export interface KeyInfo {
@@ -333,6 +360,10 @@ export const api = {
   settingsSet: (settings: Settings) => invoke<Settings>('settings_set', { settings }),
   appInfo: () => invoke<{ version: string; data_dir: string }>('app_info'),
   passphrasesClear: () => invoke<void>('passphrases_clear'),
+  mcpStatus: () => invoke<McpStatus>('mcp_status'),
+  mcpRegenerateToken: () => invoke<McpStatus>('mcp_regenerate_token'),
+  mcpJournal: () => invoke<McpLogEntry[]>('mcp_journal'),
+  mcpSelectionReply: (id: number, text: string) => invoke<void>('mcp_selection_reply', { id, text }),
 
   // snippets
   snippets: () => invoke<Snippet[]>('snippets_list'),

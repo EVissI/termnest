@@ -6,8 +6,9 @@
   import { comboFor, comboOf, hotkeyActions, normalizeCombo, type HotkeyAction } from '../lib/hotkeys';
   import { confirmDialog, saveSettings, store, toast, ui } from '../stores/app.svelte';
   import Modal from './Modal.svelte';
+  import ClaudeSettings from './ClaudeSettings.svelte';
 
-  type Section = 'appearance' | 'behavior' | 'hotkeys' | 'hosts' | 'about';
+  type Section = 'appearance' | 'behavior' | 'hotkeys' | 'claude' | 'hosts' | 'about';
   let section = $state<Section>('appearance');
   let form = $state<Settings>(JSON.parse(JSON.stringify(store.settings)));
   let capturing = $state<HotkeyAction | null>(null);
@@ -27,7 +28,7 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   function valid(s: Settings): boolean {
-    return [s.font_size, s.line_height, s.scrollback, s.keepalive_secs].every(
+    return [s.font_size, s.line_height, s.scrollback, s.keepalive_secs, s.claude.mcp_port, s.claude.max_agents, s.claude.context_lines].every(
       (n) => typeof n === 'number' && Number.isFinite(n),
     );
   }
@@ -119,6 +120,7 @@
     { id: 'appearance', label: 'Внешний вид' },
     { id: 'behavior', label: 'Поведение' },
     { id: 'hotkeys', label: 'Горячие клавиши' },
+    { id: 'claude', label: 'Интеграция с Claude' },
     { id: 'hosts', label: 'Известные хосты' },
     { id: 'about', label: 'О программе' },
   ];
@@ -260,6 +262,8 @@
           </tbody>
         </table>
         <p class="hint">«Изменить» - нажмите новое сочетание, Esc - отмена.</p>
+      {:else if section === 'claude'}
+        <ClaudeSettings bind:claude={form.claude} />
       {:else if section === 'hosts'}
         {#each known as h (`${h.host}:${h.port}:${h.key_type}`)}
           <div class="known">

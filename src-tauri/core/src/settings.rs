@@ -40,6 +40,50 @@ pub enum RestoreMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMode {
+    /// The agent reads the project and proposes changes without editing files.
+    Propose,
+    /// The agent edits files of the project without asking.
+    #[default]
+    Edit,
+}
+
+pub const DEFAULT_MCP_PORT: u16 = 47731;
+
+/// Claude Code integration (SPEC section 12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeSettings {
+    /// Local MCP server for Claude Code; off by default.
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+    pub agent_mode: AgentMode,
+    /// Terminal lines sent to the agent when nothing is selected.
+    pub context_lines: u32,
+    /// Agents running at the same time; the rest wait in a queue.
+    pub max_agents: u32,
+    /// Path to the Claude Code CLI; empty means `claude` from PATH.
+    pub cli_path: Option<String>,
+    /// The first-use notice about terminal output going to Claude was accepted.
+    pub notice_accepted: bool,
+}
+
+impl Default for ClaudeSettings {
+    fn default() -> Self {
+        Self {
+            mcp_enabled: false,
+            mcp_port: DEFAULT_MCP_PORT,
+            agent_mode: AgentMode::Edit,
+            context_lines: 200,
+            max_agents: 3,
+            cli_path: None,
+            notice_accepted: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -63,6 +107,7 @@ pub struct Settings {
     /// Hotkey overrides: action id -> combination like "Ctrl+Shift+T".
     pub hotkeys: BTreeMap<String, String>,
     pub sidebar_visible: bool,
+    pub claude: ClaudeSettings,
 }
 
 impl Default for Settings {
@@ -84,6 +129,7 @@ impl Default for Settings {
             extra_keys: Vec::new(),
             hotkeys: BTreeMap::new(),
             sidebar_visible: true,
+            claude: ClaudeSettings::default(),
         }
     }
 }
@@ -104,6 +150,15 @@ impl Settings {
             .filter(|p| !p.is_empty());
         self.extra_keys.retain(|k| !k.trim().is_empty());
         self.extra_keys.dedup();
+        let c = &mut self.claude;
+        c.mcp_port = c.mcp_port.max(1024);
+        c.context_lines = c.context_lines.clamp(20, 2000);
+        c.max_agents = c.max_agents.clamp(1, 8);
+        c.cli_path = c
+            .cli_path
+            .take()
+            .map(|p| p.trim().to_owned())
+            .filter(|p| !p.is_empty());
     }
 }
 

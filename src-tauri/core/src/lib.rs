@@ -11,6 +11,7 @@ pub mod ids;
 pub mod keydeploy;
 pub mod keys;
 pub mod layout;
+pub mod mcp;
 pub mod paths;
 pub mod project;
 pub mod prompt;
@@ -22,6 +23,7 @@ pub mod snippets;
 pub mod ssh;
 pub mod ssh_config;
 pub mod target;
+pub mod textutil;
 pub mod transfer;
 
 pub use error::{CoreError, CoreResult, ErrorKind};

@@ -155,6 +155,13 @@ export async function initStore(): Promise<void> {
       store.prompts = store.prompts.filter((p) => p.id !== id);
     }),
     on<{ sessions: number; other_windows: boolean }>('window://close-requested', (r) => (ui.closeRequest = r)),
+    on<number>('mcp://selection-request', (id) => {
+      // Answer with the selection of this window's focused panel (empty answers are ignored).
+      const w = myWindow();
+      const tab = w?.tabs.find((t) => t.id === w.active);
+      const text = tab ? (terminals.get(tab.focused)?.term.getSelection() ?? '') : '';
+      void api.mcpSelectionReply(id, text).catch(() => {});
+    }),
   ]);
 
   const [layout, settings, hosts, snippets, statuses, transfers, prompts, keys] = await Promise.all([
