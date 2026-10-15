@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { api, errorMessage, type AgentEvent, type AgentTask, type SessionId } from '../lib/ipc';
+  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { renderMarkdown } from '../lib/markdown';
   import { allPanes } from '../lib/layout/geometry';
   import { attempt, focusedPane, sendText } from '../lib/actions';
   import { render, toTerminalInput, variables } from '../lib/snippets';
@@ -30,6 +32,15 @@
       return !(ev.kind === 'text' && next && (next.kind === 'result' || next.kind === 'error') && next.text.trim() === ev.text.trim());
     }),
   );
+
+  /** Links in agent messages open in the default browser, not in the app window. */
+  function openLink(e: MouseEvent): void {
+    const a = (e.target as HTMLElement).closest('a');
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute('href') ?? '';
+    if (/^https?:\/\//i.test(href)) void openUrl(href).catch(() => {});
+  }
 
   async function scrollDown(): Promise<void> {
     await tick();
@@ -140,11 +151,18 @@
     </div>
   {/if}
 
-  <div class="log" bind:this={log}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="log" bind:this={log} onclick={openLink}>
     {#each shown as ev, i (i)}
       <div class="ev {ev.kind}">
         <div class="kind">{labels[ev.kind] ?? ev.kind}</div>
-        <div class="text">{ev.text}</div>
+        {#if ev.kind === 'text' || ev.kind === 'result'}
+          <!-- renderMarkdown() sanitizes the HTML with DOMPurify. -->
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+          <div class="text md">{@html renderMarkdown(ev.text)}</div>
+        {:else}
+          <div class="text">{ev.text}</div>
+        {/if}
       </div>
     {:else}
       <p class="hint">{task ? 'Событий пока нет.' : 'Загрузка...'}</p>
@@ -249,6 +267,75 @@
     white-space: pre-wrap;
     word-break: break-word;
     user-select: text;
+  }
+  .md :global(p) {
+    margin: 0 0 6px;
+  }
+  .md :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .md :global(h1),
+  .md :global(h2),
+  .md :global(h3),
+  .md :global(h4) {
+    margin: 8px 0 4px;
+    font-size: 14px;
+  }
+  .md :global(h1) {
+    font-size: 16px;
+  }
+  .md :global(ul),
+  .md :global(ol) {
+    margin: 2px 0 6px;
+    padding-left: 22px;
+  }
+  .md :global(li) {
+    margin: 1px 0;
+  }
+  .md :global(code) {
+    font-family: 'Cascadia Mono', Consolas, monospace;
+    font-size: 12px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-hover);
+  }
+  .md :global(pre) {
+    margin: 4px 0 8px;
+    padding: 8px 10px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .md :global(pre code) {
+    padding: 0;
+    background: none;
+    white-space: pre;
+  }
+  .md :global(blockquote) {
+    margin: 4px 0;
+    padding-left: 10px;
+    border-left: 3px solid var(--border);
+    color: var(--text-dim);
+  }
+  .md :global(table) {
+    border-collapse: collapse;
+    margin: 4px 0 8px;
+  }
+  .md :global(th),
+  .md :global(td) {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    text-align: left;
+  }
+  .md :global(a) {
+    color: var(--accent);
+  }
+  .text.md {
+    white-space: normal;
+  }
+  .ev.result .text.md {
+    color: var(--text);
   }
   .ev.tool .text {
     font-family: 'Cascadia Mono', Consolas, monospace;

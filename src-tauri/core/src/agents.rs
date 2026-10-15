@@ -23,6 +23,12 @@ pub type AgentId = String;
 const MAX_EVENTS: usize = 600;
 const MAX_EVENT_TEXT: usize = 4000;
 
+/// termnest renders agent messages as GitHub-flavored Markdown (HTML is stripped).
+pub const OUTPUT_FORMAT_PROMPT: &str = "Your messages are shown in the termnest app, which renders \
+GitHub-flavored Markdown only. Format every reply as Markdown: headings, lists, `inline code`, fenced \
+code blocks with a language tag for commands and code, tables when useful. Do not use HTML tags. \
+Reply in the language the user writes in.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
@@ -779,7 +785,9 @@ impl AgentManager {
                 (true, _) => "dontAsk",
                 (false, AgentMode::Edit) => "acceptEdits",
                 (false, AgentMode::Propose) => "plan",
-            });
+            })
+            .arg("--append-system-prompt")
+            .arg(OUTPUT_FORMAT_PROMPT);
         if let Some(sid) = &task.claude_session {
             cmd.arg("--resume").arg(sid);
         }
