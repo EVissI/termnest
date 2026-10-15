@@ -887,14 +887,15 @@ impl AgentManager {
             ),
             Some((text, true)) => {
                 let hint = auth_hint(&text);
+                let error = match &hint {
+                    Some(h) => format!("{text}\n{h}"),
+                    None => text.clone(),
+                };
                 self.update(
                     &id,
                     |t| {
                         t.state = AgentState::Failed;
-                        t.error = Some(match &hint {
-                            Some(h) => format!("{text}\n{h}"),
-                            None => text.clone(),
-                        });
+                        t.error = Some(error);
                     },
                     hint.map(|h| (EventKind::Info, h)),
                 )
