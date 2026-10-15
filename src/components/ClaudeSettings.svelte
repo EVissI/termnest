@@ -75,7 +75,8 @@
     return new Date(t * 1000).toLocaleTimeString();
   }
 
-  const masked = $derived(status ? `${status.token.slice(0, 6)}...${status.token.slice(-4)}` : '');
+  // Deliberately not token-like: text copied from the screen must not look usable.
+  const masked = '<токен скрыт: используйте «Скопировать команду»>';
 </script>
 
 <h4>MCP-сервер</h4>
