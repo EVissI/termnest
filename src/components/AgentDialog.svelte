@@ -22,6 +22,15 @@
   const summary = $derived(store.agents[id]);
   const running = $derived(summary?.state === 'running' || summary?.state === 'queued');
 
+  // Claude Code sends its last message and then the same text again as the result:
+  // show it once, as the result.
+  const shown = $derived(
+    events.filter((ev, i) => {
+      const next = events[i + 1];
+      return !(ev.kind === 'text' && next && (next.kind === 'result' || next.kind === 'error') && next.text.trim() === ev.text.trim());
+    }),
+  );
+
   async function scrollDown(): Promise<void> {
     await tick();
     if (log) log.scrollTop = log.scrollHeight;
@@ -132,7 +141,7 @@
   {/if}
 
   <div class="log" bind:this={log}>
-    {#each events as ev, i (i)}
+    {#each shown as ev, i (i)}
       <div class="ev {ev.kind}">
         <div class="kind">{labels[ev.kind] ?? ev.kind}</div>
         <div class="text">{ev.text}</div>
