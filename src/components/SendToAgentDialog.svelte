@@ -33,19 +33,32 @@
   const project = $derived(prepared?.project ?? null);
   const ask = $derived(mode === 'ask');
 
-  async function prepare(): Promise<void> {
+  // Comment the current prompt text was built with, and the build in progress.
+  let preparedComment = '';
+  let pending: Promise<void> | null = null;
+
+  function prepare(): Promise<void> {
+    pending = doPrepare().finally(() => (pending = null));
+    return pending;
+  }
+
+  async function doPrepare(): Promise<void> {
     if (!pane) return;
-    loading = true;
+    // Only the first build blocks the dialog; later rebuilds (comment, mode) must not
+    // disable the send button under the cursor.
+    if (!prepared) loading = true;
     error = '';
     try {
       const cwd = pane.session !== null ? (sessionCwd.get(pane.session) ?? null) : null;
-      prepared = await api.agentPrepare(paneId, selection || null, cwd, comment, mode === 'ask');
+      const forComment = comment;
+      prepared = await api.agentPrepare(paneId, selection || null, cwd, forComment, mode === 'ask');
+      preparedComment = forComment;
       // Without a project only a question is possible.
       if (mode === null || (mode === 'fix' && !prepared.project)) {
         const next: Mode = prepared.project ? 'fix' : 'ask';
         if (next !== mode) {
           mode = next;
-          await prepare();
+          await doPrepare();
           return;
         }
       }
@@ -84,7 +97,11 @@
   }
 
   async function send(): Promise<void> {
-    if (!prepared || (!ask && !project)) return;
+    if (sending) return;
+    // The comment may have changed after the last build: use the up-to-date text.
+    if (pending) await pending;
+    if (!edited && comment !== preparedComment) await prepare();
+    if (!prepared || (!ask && !project) || !prompt.trim()) return;
     if (!store.settings?.claude.notice_accepted) {
       const ok = await confirmDialog({
         title: 'Отправка в Claude',
@@ -165,6 +182,12 @@
           bind:value={comment}
           autofocus
           onchange={() => !edited && prepare()}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (canSend) void send();
+            }
+          }}
           placeholder="Например: почему упал сервис и как это починить?"
         />
       </label>
