@@ -28,6 +28,23 @@ Full specification: [SPEC.md](SPEC.md).
 
 Passwords and passphrases are never written to disk.
 
+## Claude Code integration
+
+Requires the Claude Code CLI installed and logged in (`claude` in PATH or a path in
+Settings > Claude integration).
+
+- **Projects.** A server, a group or a single panel can be linked to a local project
+  folder (panel > server > group). The project is shown in the panel header.
+- **MCP server** (off by default). Settings > Claude integration shows the
+  `claude mcp add ...` command. Read-only tools: `list_hosts`, `list_sessions`,
+  `read_output`, `read_selection`, `sftp_list`, `sftp_read`, `server_info`. Actions
+  `exec` and `send_input` run only after approval in termnest. Listens on 127.0.0.1
+  only, bearer token in `%APPDATA%\termnest\mcp-token`.
+- **Send to Claude** (Ctrl+Shift+A or the button in the panel header): the selection or
+  the last lines of output go to a Claude Code agent started in the project folder; for
+  git projects each task gets its own worktree and branch `termnest/fix-<id>`. Progress,
+  changed files, follow-ups, diff and stop are in the Agents section.
+
 ## Data
 
 `%APPDATA%\termnest\`: `hosts.toml`, `snippets.toml`, `settings.toml`, `layout.json`,
