@@ -10,6 +10,7 @@
   import Workspace from './components/Workspace.svelte';
   import SftpPanel from './components/SftpPanel.svelte';
   import HostDialog from './components/HostDialog.svelte';
+  import ServerInfoDialog from './components/ServerInfoDialog.svelte';
   import KeyGenDialog from './components/KeyGenDialog.svelte';
   import DeployWizard from './components/DeployWizard.svelte';
   import SnippetDialog from './components/SnippetDialog.svelte';
@@ -33,6 +34,7 @@
     !!ui.confirm ||
       !!ui.textPrompt ||
       !!ui.hostDialog ||
+      !!ui.serverInfo ||
       ui.settingsOpen ||
       ui.keyGenOpen ||
       !!ui.deploy ||
@@ -128,6 +130,7 @@
   </div>
 
   {#if ui.hostDialog}<HostDialog host={ui.hostDialog} />{/if}
+  {#if ui.serverInfo}<ServerInfoDialog source={ui.serverInfo} />{/if}
   {#if ui.keyGenOpen}<KeyGenDialog />{/if}
   {#if ui.deploy}<DeployWizard hostId={ui.deploy.hostId} keyPath={ui.deploy.keyPath} />{/if}
   {#if ui.snippetEdit}<SnippetDialog snippet={ui.snippetEdit} />{/if}

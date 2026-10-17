@@ -12,6 +12,9 @@ Full specification: [SPEC.md](SPEC.md).
 - Server manager: groups with subgroups, drag and drop to reorder servers and groups
   or move them between groups, search, quick connect `user@host:port`, import from
   `~/.ssh/config`.
+- Server information window (server menu or the panel header): CPU, memory, network,
+  disks and the busiest processes with auto refresh, plus the keys in every readable
+  `authorized_keys` (your own keys and the key of the connection are marked).
 - Password logins per server: the edit dialog asks the server itself which login
   methods it offers and can forbid or allow logins without a key (sshd drop-in,
   checked with `sshd -t`, rolled back if key login stops working).

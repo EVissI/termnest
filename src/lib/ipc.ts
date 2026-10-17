@@ -111,6 +111,36 @@ export interface PasswordLoginReport extends PasswordLoginProbe {
   steps: string[];
 }
 
+export interface MonitorOpened {
+  id: number;
+  key_fingerprint: string | null;
+}
+
+export interface ServerInfo {
+  hostname: string;
+  os: string;
+  kernel: string;
+  cpu_model: string;
+  cpu_cores: number;
+  uptime_secs: number;
+  load: [number, number, number];
+  cpu_percent: number | null;
+  mem_total: number;
+  mem_available: number;
+  swap_total: number;
+  swap_free: number;
+  disks: { mount: string; filesystem: string; total: number; used: number; available: number }[];
+  net_rx_rate: number | null;
+  net_tx_rate: number | null;
+  processes: { pid: number; user: string; cpu: number; mem: number; command: string }[];
+  user: string;
+  key_files: {
+    user: string;
+    path: string;
+    keys: { key_type: string; fingerprint: string; comment: string; options: string }[];
+  }[];
+}
+
 export interface ProjectInfo {
   path: string;
   name: string;
@@ -391,6 +421,9 @@ export const api = {
   groupMove: (name: string, parent: string | null, before: string | null) =>
     invoke<void>('group_move', { name, parent, before }),
   hostMove: (id: string, group: string | null, before: string | null) => invoke<void>('host_move', { id, group, before }),
+  monitorOpen: (host: string | null, session: number | null) => invoke<MonitorOpened>('monitor_open', { host, session }),
+  monitorSample: (id: number) => invoke<ServerInfo>('monitor_sample', { id }),
+  monitorClose: (id: number) => invoke<void>('monitor_close', { id }),
   hostPasswordLogin: (id: string) => invoke<PasswordLoginProbe>('host_password_login', { id }),
   hostSetPasswordLogin: (id: string, allow: boolean) =>
     invoke<PasswordLoginReport>('host_set_password_login', { id, allow }),

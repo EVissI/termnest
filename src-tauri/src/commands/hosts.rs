@@ -1,5 +1,5 @@
 use termnest_core::hosts::{Host, HostsList};
-use termnest_core::{keydeploy, paths, ssh, ssh_config, CoreError, ErrorKind};
+use termnest_core::{keydeploy, monitor, paths, ssh, ssh_config, CoreError, ErrorKind};
 
 use super::AppStateRef;
 
@@ -179,4 +179,38 @@ pub async fn host_set_password_login(
         &state.ctx,
     )
     .await
+}
+
+/// Opens the connection of a server information window: a saved server (`host`) or
+/// the server of an open session (`session`, also for quick connections).
+#[tauri::command]
+pub async fn monitor_open(
+    state: AppStateRef<'_>,
+    host: Option<String>,
+    session: Option<u64>,
+) -> Result<monitor::MonitorOpened, CoreError> {
+    let spec = match (host, session) {
+        (Some(id), _) => super::layout::spec_for_host(&state, &id)?,
+        (None, Some(s)) => state.sessions.spec(s)?,
+        (None, None) => return Err(CoreError::invalid("Не указан сервер")),
+    };
+    state
+        .monitors
+        .open(&spec.target(), spec.key_path, &state.ctx)
+        .await
+}
+
+/// Collects resource usage and authorized keys (fixed read-only script).
+#[tauri::command]
+pub async fn monitor_sample(
+    state: AppStateRef<'_>,
+    id: u64,
+) -> Result<monitor::ServerInfo, CoreError> {
+    state.monitors.sample(id).await
+}
+
+#[tauri::command]
+pub async fn monitor_close(state: AppStateRef<'_>, id: u64) -> Result<(), CoreError> {
+    state.monitors.close(id).await;
+    Ok(())
 }

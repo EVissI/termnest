@@ -104,6 +104,7 @@
       items: [
         { label: 'Подключиться', action: () => connect(h) },
         { label: 'Подключиться в новой вкладке', action: () => connect(h, true) },
+        { label: 'Информация о сервере', action: () => (ui.serverInfo = { host: h.id, session: null, title: h.name }) },
         { separator: true, label: '' },
         { label: 'Редактировать', action: () => (ui.hostDialog = { ...h }) },
         { label: 'Дублировать', action: () => attempt(() => api.hostDuplicate(h.id)) },

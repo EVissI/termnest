@@ -150,6 +150,11 @@
     projectMenu = { x: e.clientX, y: e.clientY, items };
   }
 
+  function openServerInfo(): void {
+    const title = pane.spec ? pane.spec.label || `${pane.spec.user}@${pane.spec.host}` : 'Сервер';
+    ui.serverInfo = { host: pane.spec?.host_id ?? null, session: pane.session, title };
+  }
+
   function splitThis(direction: 'horizontal' | 'vertical'): void {
     const source = pane.spec ? ({ kind: 'pane', pane: pane.id } as const) : ({ kind: 'empty' } as const);
     void attempt(() => api.paneSplit(pane.id, direction, source));
@@ -227,6 +232,11 @@
     {#if !project && pane.spec}
       <button class="icon" type="button" title="Привязать к проекту" onclick={(e) => openProjectMenu(e)}>
         <Icon name="link" size={13} />
+      </button>
+    {/if}
+    {#if pane.spec?.host_id || pane.session !== null}
+      <button class="icon" type="button" title="Информация о сервере" onclick={openServerInfo}>
+        <Icon name="activity" size={13} />
       </button>
     {/if}
     {#if pane.spec}

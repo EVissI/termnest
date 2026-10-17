@@ -13,6 +13,7 @@ pub mod keydeploy;
 pub mod keys;
 pub mod layout;
 pub mod mcp;
+pub mod monitor;
 pub mod paths;
 pub mod project;
 pub mod prompt;

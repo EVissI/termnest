@@ -71,6 +71,8 @@ export const ui = $state({
   selected: [] as PaneId[],
   restorePending: false,
   hostDialog: null as Host | null,
+  /** Server information window: a saved server or the server of a session. */
+  serverInfo: null as { host: string | null; session: number | null; title: string } | null,
   settingsOpen: false,
   keyGenOpen: false,
   deploy: null as DeployRequest | null,
