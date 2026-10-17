@@ -315,7 +315,7 @@ async fn apply_drop_in(
     }
     steps.push("sshd перезагружен".to_owned());
 
-    if let Err(e) = verify_key_login(check.target, check.key_path, check.ctx).await {
+    if let Err(e) = verify_after_reload(check).await {
         restore().await;
         let _ = run(reload).await;
         return Err(CoreError::new(
@@ -402,6 +402,34 @@ async fn verify_key_login(
     let handle = ssh::connect(target, Auth::Key(key_path), ctx).await?;
     ssh::disconnect(&handle).await;
     Ok(())
+}
+
+/// Key login right after an sshd reload. On SIGHUP sshd re-executes itself and may
+/// drop connections for a moment, so only a clear answer (key rejected, key problem)
+/// ends the wait early.
+async fn verify_after_reload(check: &DropInCheck<'_>) -> CoreResult<()> {
+    let mut last = None;
+    for attempt in 0..5u64 {
+        tokio::time::sleep(std::time::Duration::from_millis(500 + attempt * 500)).await;
+        match verify_key_login(check.target, check.key_path, check.ctx).await {
+            Ok(()) => return Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind,
+                    ErrorKind::AuthFailed
+                        | ErrorKind::KeyEncrypted
+                        | ErrorKind::KeyInvalid
+                        | ErrorKind::KeyNotFound
+                        | ErrorKind::HostKeyChanged
+                        | ErrorKind::HostKeyRejected
+                ) =>
+            {
+                return Err(e)
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| CoreError::new(ErrorKind::Remote, "Нет ответа от сервера")))
 }
 
 /// Returns the command prefix for root actions (`""` for root, `"sudo -n "` with
