@@ -9,8 +9,12 @@ Full specification: [SPEC.md](SPEC.md).
 
 - Terminal on xterm.js (WebGL renderer with DOM fallback, truecolor, search, clickable
   links, copy on select, multi-line paste warning).
-- Server manager: groups, search, quick connect `user@host:port`, import from
+- Server manager: groups with subgroups, drag and drop to reorder servers and groups
+  or move them between groups, search, quick connect `user@host:port`, import from
   `~/.ssh/config`.
+- Password logins per server: the edit dialog asks the server itself which login
+  methods it offers and can forbid or allow logins without a key (sshd drop-in,
+  checked with `sshd -t`, rolled back if key login stops working).
 - Host key verification against termnest's own `known_hosts`: unknown hosts ask for
   the SHA256 fingerprint, changed keys are blocked until the old entry is removed.
 - Keys: list of `~/.ssh` keys, generation (Ed25519 / RSA 4096, owner-only ACL),

@@ -97,8 +97,18 @@ export interface Host {
 
 export interface Group {
   name: string;
+  parent?: string | null;
   collapsed: boolean;
   project?: string | null;
+}
+
+export interface PasswordLoginProbe {
+  methods: string[];
+  password_login: boolean;
+}
+
+export interface PasswordLoginReport extends PasswordLoginProbe {
+  steps: string[];
 }
 
 export interface ProjectInfo {
@@ -377,7 +387,13 @@ export const api = {
   hostUpsert: (host: Host) => invoke<Host>('hosts_upsert', { host }),
   hostDuplicate: (id: string) => invoke<Host>('hosts_duplicate', { id }),
   hostDelete: (id: string) => invoke<void>('hosts_delete', { id }),
-  groupAdd: (name: string) => invoke<void>('group_add', { name }),
+  groupAdd: (name: string, parent: string | null = null) => invoke<void>('group_add', { name, parent }),
+  groupMove: (name: string, parent: string | null, before: string | null) =>
+    invoke<void>('group_move', { name, parent, before }),
+  hostMove: (id: string, group: string | null, before: string | null) => invoke<void>('host_move', { id, group, before }),
+  hostPasswordLogin: (id: string) => invoke<PasswordLoginProbe>('host_password_login', { id }),
+  hostSetPasswordLogin: (id: string, allow: boolean) =>
+    invoke<PasswordLoginReport>('host_set_password_login', { id, allow }),
   groupRename: (old: string, name: string) => invoke<void>('group_rename', { old, new: name }),
   groupDelete: (name: string) => invoke<void>('group_delete', { name }),
   groupSetCollapsed: (name: string, collapsed: boolean) => invoke<void>('group_set_collapsed', { name, collapsed }),

@@ -24,8 +24,15 @@ export function effectiveProject(pane: Pane): EffectiveProject | null {
   const host = store.hosts.hosts.find((h) => h.id === hostId);
   if (!host) return null;
   if (host.project) return { path: host.project, name: folderName(host.project), source: 'host' };
-  const group = store.hosts.groups.find((g) => g.name === host.group);
-  if (group?.project) return { path: group.project, name: folderName(group.project), source: 'group' };
+  // The nearest enclosing group with a project.
+  const seen = new Set<string>();
+  let name = host.group ?? null;
+  while (name && !seen.has(name)) {
+    seen.add(name);
+    const group = store.hosts.groups.find((g) => g.name === name);
+    if (group?.project) return { path: group.project, name: folderName(group.project), source: 'group' };
+    name = group?.parent ?? null;
+  }
   return null;
 }
 

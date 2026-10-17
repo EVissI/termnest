@@ -79,11 +79,73 @@ impl Host {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
+    /// Enclosing group (subgroups); `None` for a top-level group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     #[serde(default)]
     pub collapsed: bool,
     /// Default project for the group's servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+}
+
+impl Group {
+    pub fn new(name: String, parent: Option<String>) -> Self {
+        Self {
+            name,
+            parent,
+            collapsed: false,
+            project: None,
+        }
+    }
+}
+
+/// Whether `name` is `ancestor` itself or lies inside it (at any depth).
+fn is_within(groups: &[Group], name: &str, ancestor: &str) -> bool {
+    let mut current = Some(name.to_owned());
+    // Bounded by the group count, so a broken file cannot loop forever.
+    for _ in 0..=groups.len() {
+        let Some(c) = current else { return false };
+        if c == ancestor {
+            return true;
+        }
+        current = groups
+            .iter()
+            .find(|g| g.name == c)
+            .and_then(|g| g.parent.clone());
+    }
+    false
+}
+
+/// Drops parents that do not exist or form a cycle, so the groups always make a tree.
+fn fix_tree(data: &mut HostsFile) {
+    for i in 0..data.groups.len() {
+        let Some(parent) = data.groups[i].parent.clone() else {
+            continue;
+        };
+        let name = data.groups[i].name.clone();
+        let exists = data.groups.iter().any(|g| g.name == parent);
+        if !exists || is_within(&data.groups, &parent, &name) {
+            data.groups[i].parent = None;
+        }
+    }
+}
+
+/// The group `name` and its enclosing groups, innermost first.
+pub fn group_chain<'a>(groups: &'a [Group], name: &str) -> Vec<&'a Group> {
+    let mut chain: Vec<&Group> = Vec::new();
+    let mut current = Some(name);
+    while let Some(c) = current {
+        let Some(g) = groups.iter().find(|g| g.name == c) else {
+            break;
+        };
+        if chain.iter().any(|x| x.name == g.name) {
+            break;
+        }
+        chain.push(g);
+        current = g.parent.as_deref();
+    }
+    chain
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +182,7 @@ impl HostStore {
                 h.id = new_id();
             }
         }
+        fix_tree(&mut data);
         Ok(Self {
             path,
             data: Mutex::new(data),
@@ -146,14 +209,11 @@ impl HostStore {
         for h in &next.hosts {
             if let Some(g) = &h.group {
                 if !next.groups.iter().any(|x| &x.name == g) {
-                    next.groups.push(Group {
-                        name: g.clone(),
-                        collapsed: false,
-                        project: None,
-                    });
+                    next.groups.push(Group::new(g.clone(), None));
                 }
             }
         }
+        fix_tree(&mut next);
         self.save(&next)?;
         *data = next;
         Ok(result)
@@ -216,19 +276,26 @@ impl HostStore {
         })
     }
 
-    pub fn add_group(&self, name: &str) -> CoreResult<()> {
+    /// Creates a group, optionally inside `parent`.
+    pub fn add_group(&self, name: &str, parent: Option<&str>) -> CoreResult<()> {
         let name = name.trim().to_owned();
         if name.is_empty() {
             return Err(CoreError::invalid("Пустое имя группы"));
         }
         self.modify(|data| {
-            if !data.groups.iter().any(|g| g.name == name) {
-                data.groups.push(Group {
-                    name,
-                    collapsed: false,
-                    project: None,
-                });
+            if data.groups.iter().any(|g| g.name == name) {
+                return Err(CoreError::new(
+                    ErrorKind::AlreadyExists,
+                    "Группа с таким именем уже есть",
+                ));
             }
+            if let Some(p) = parent {
+                if !data.groups.iter().any(|g| g.name == p) {
+                    return Err(CoreError::new(ErrorKind::NotFound, "Группа не найдена"));
+                }
+            }
+            data.groups
+                .push(Group::new(name, parent.map(str::to_owned)));
             Ok(())
         })
     }
@@ -245,8 +312,13 @@ impl HostStore {
                     "Группа с таким именем уже есть",
                 ));
             }
-            for g in data.groups.iter_mut().filter(|g| g.name == old) {
-                g.name = new.clone();
+            for g in data.groups.iter_mut() {
+                if g.name == old {
+                    g.name = new.clone();
+                }
+                if g.parent.as_deref() == Some(old) {
+                    g.parent = Some(new.clone());
+                }
             }
             for h in data.hosts.iter_mut() {
                 if h.group.as_deref() == Some(old) {
@@ -257,15 +329,89 @@ impl HostStore {
         })
     }
 
-    /// Deletes the group; its hosts become ungrouped.
+    /// Deletes the group; its servers and subgroups move to the enclosing group.
     pub fn delete_group(&self, name: &str) -> CoreResult<()> {
         self.modify(|data| {
+            let parent = data
+                .groups
+                .iter()
+                .find(|g| g.name == name)
+                .and_then(|g| g.parent.clone());
             data.groups.retain(|g| g.name != name);
-            for h in data.hosts.iter_mut() {
-                if h.group.as_deref() == Some(name) {
-                    h.group = None;
+            for g in data.groups.iter_mut() {
+                if g.parent.as_deref() == Some(name) {
+                    g.parent = parent.clone();
                 }
             }
+            for h in data.hosts.iter_mut() {
+                if h.group.as_deref() == Some(name) {
+                    h.group = parent.clone();
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Moves a server into `group` (`None` - no group), placing it before the server
+    /// `before` or, without it, after the last server of that group.
+    pub fn move_host(&self, id: &str, group: Option<&str>, before: Option<&str>) -> CoreResult<()> {
+        self.modify(|data| {
+            if let Some(g) = group {
+                if !data.groups.iter().any(|x| x.name == g) {
+                    return Err(CoreError::new(ErrorKind::NotFound, "Группа не найдена"));
+                }
+            }
+            let pos = data
+                .hosts
+                .iter()
+                .position(|h| h.id == id)
+                .ok_or_else(|| CoreError::new(ErrorKind::NotFound, "Сервер не найден"))?;
+            let mut host = data.hosts.remove(pos);
+            host.group = group.map(str::to_owned);
+            let at = before
+                .and_then(|b| data.hosts.iter().position(|h| h.id == b))
+                .or_else(|| {
+                    data.hosts
+                        .iter()
+                        .rposition(|h| h.group == host.group)
+                        .map(|i| i + 1)
+                })
+                .unwrap_or(data.hosts.len());
+            data.hosts.insert(at, host);
+            Ok(())
+        })
+    }
+
+    /// Moves a group into `parent` (`None` - top level), placing it before the group
+    /// `before` or, without it, at the end.
+    pub fn move_group(
+        &self,
+        name: &str,
+        parent: Option<&str>,
+        before: Option<&str>,
+    ) -> CoreResult<()> {
+        self.modify(|data| {
+            if let Some(p) = parent {
+                if !data.groups.iter().any(|g| g.name == p) {
+                    return Err(CoreError::new(ErrorKind::NotFound, "Группа не найдена"));
+                }
+                if is_within(&data.groups, p, name) {
+                    return Err(CoreError::invalid(
+                        "Нельзя переместить группу внутрь самой себя",
+                    ));
+                }
+            }
+            let pos = data
+                .groups
+                .iter()
+                .position(|g| g.name == name)
+                .ok_or_else(|| CoreError::new(ErrorKind::NotFound, "Группа не найдена"))?;
+            let mut group = data.groups.remove(pos);
+            group.parent = parent.map(str::to_owned);
+            let at = before
+                .and_then(|b| data.groups.iter().position(|g| g.name == b))
+                .unwrap_or(data.groups.len());
+            data.groups.insert(at, group);
             Ok(())
         })
     }
@@ -383,14 +529,7 @@ mod tests {
         let reloaded = HostStore::load(path).unwrap().snapshot();
         assert_eq!(reloaded.hosts.len(), 2);
         assert_eq!(reloaded.hosts[0].port, 2222);
-        assert_eq!(
-            reloaded.groups,
-            vec![Group {
-                name: "prod".into(),
-                collapsed: false,
-                project: None,
-            }]
-        );
+        assert_eq!(reloaded.groups, vec![Group::new("prod".into(), None)]);
 
         store.delete(&b.id).unwrap();
         assert_eq!(store.snapshot().hosts.len(), 1);
@@ -433,6 +572,115 @@ mod tests {
         store.delete_group("production").unwrap();
         assert_eq!(store.get(&a.id).unwrap().group, None);
         assert!(store.snapshot().groups.is_empty());
+    }
+
+    fn names(store: &HostStore) -> Vec<(String, Option<String>)> {
+        store
+            .snapshot()
+            .groups
+            .into_iter()
+            .map(|g| (g.name, g.parent))
+            .collect()
+    }
+
+    #[test]
+    fn subgroups() {
+        let dir = TestDir::new();
+        let store = HostStore::load(dir.path().join("h.toml")).unwrap();
+        let a = store.upsert(host("a")).unwrap();
+        store.add_group("web", Some("prod")).unwrap();
+        store.add_group("eu", Some("web")).unwrap();
+        assert_eq!(
+            store.add_group("web", None).unwrap_err().kind,
+            ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            store.add_group("x", Some("missing")).unwrap_err().kind,
+            ErrorKind::NotFound
+        );
+
+        // A group cannot move into itself or its own subgroup.
+        assert!(store.move_group("prod", Some("eu"), None).is_err());
+        assert!(store.move_group("web", Some("web"), None).is_err());
+
+        store.rename_group("web", "www").unwrap();
+        assert_eq!(names(&store)[2], ("eu".into(), Some("www".into())));
+
+        let chain: Vec<_> = group_chain(&store.snapshot().groups, "eu")
+            .into_iter()
+            .map(|g| g.name.clone())
+            .collect();
+        assert_eq!(chain, ["eu", "www", "prod"]);
+
+        // Deleting a group lifts its content one level up.
+        store.move_host(&a.id, Some("www"), None).unwrap();
+        store.delete_group("www").unwrap();
+        assert_eq!(store.get(&a.id).unwrap().group.as_deref(), Some("prod"));
+        assert_eq!(names(&store)[1], ("eu".into(), Some("prod".into())));
+    }
+
+    #[test]
+    fn move_order() {
+        let dir = TestDir::new();
+        let store = HostStore::load(dir.path().join("h.toml")).unwrap();
+        let a = store.upsert(host("a")).unwrap();
+        let b = store.upsert(host("b")).unwrap();
+        let mut c = host("c");
+        c.group = None;
+        let c = store.upsert(c).unwrap();
+        let order = |s: &HostStore| {
+            s.snapshot()
+                .hosts
+                .into_iter()
+                .map(|h| (h.name, h.group))
+                .collect::<Vec<_>>()
+        };
+
+        store.move_host(&b.id, Some("prod"), Some(&a.id)).unwrap();
+        assert_eq!(order(&store)[0].0, "b");
+        // Without `before` a server goes after the last one of its new group.
+        store.move_host(&c.id, Some("prod"), None).unwrap();
+        assert_eq!(
+            order(&store),
+            vec![
+                ("b".into(), Some("prod".into())),
+                ("a".into(), Some("prod".into())),
+                ("c".into(), Some("prod".into())),
+            ]
+        );
+        store.move_host(&a.id, None, None).unwrap();
+        assert_eq!(order(&store)[2], ("a".into(), None));
+
+        store.add_group("dev", None).unwrap();
+        store.add_group("test", None).unwrap();
+        store.move_group("test", None, Some("prod")).unwrap();
+        store.move_group("prod", Some("dev"), None).unwrap();
+        assert_eq!(
+            names(&store),
+            vec![
+                ("test".into(), None),
+                ("dev".into(), None),
+                ("prod".into(), Some("dev".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn broken_tree_is_repaired_on_load() {
+        let dir = TestDir::new();
+        let path = dir.path().join("h.toml");
+        std::fs::write(
+            &path,
+            "[[group]]\nname = \"a\"\nparent = \"b\"\n[[group]]\nname = \"b\"\nparent = \"a\"\n[[group]]\nname = \"c\"\nparent = \"gone\"\n",
+        )
+        .unwrap();
+        let store = HostStore::load(path).unwrap();
+        let groups = names(&store);
+        assert_eq!(groups[2], ("c".into(), None));
+        assert!(
+            groups[0].1.is_none() || groups[1].1.is_none(),
+            "cycle broken"
+        );
     }
 
     #[test]

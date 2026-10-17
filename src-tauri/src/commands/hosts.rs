@@ -1,5 +1,5 @@
 use termnest_core::hosts::{Host, HostsList};
-use termnest_core::{paths, ssh_config, CoreError, ErrorKind};
+use termnest_core::{keydeploy, paths, ssh, ssh_config, CoreError, ErrorKind};
 
 use super::AppStateRef;
 
@@ -30,8 +30,12 @@ pub fn hosts_delete(state: AppStateRef<'_>, id: String) -> Result<(), CoreError>
 }
 
 #[tauri::command]
-pub fn group_add(state: AppStateRef<'_>, name: String) -> Result<(), CoreError> {
-    state.hosts.add_group(&name)?;
+pub fn group_add(
+    state: AppStateRef<'_>,
+    name: String,
+    parent: Option<String>,
+) -> Result<(), CoreError> {
+    state.hosts.add_group(&name, parent.as_deref())?;
     state.hosts_changed();
     Ok(())
 }
@@ -46,6 +50,36 @@ pub fn group_rename(state: AppStateRef<'_>, old: String, new: String) -> Result<
 #[tauri::command]
 pub fn group_delete(state: AppStateRef<'_>, name: String) -> Result<(), CoreError> {
     state.hosts.delete_group(&name)?;
+    state.hosts_changed();
+    Ok(())
+}
+
+/// Drag and drop: a server into a group (`None` - no group) before another server.
+#[tauri::command]
+pub fn host_move(
+    state: AppStateRef<'_>,
+    id: String,
+    group: Option<String>,
+    before: Option<String>,
+) -> Result<(), CoreError> {
+    state
+        .hosts
+        .move_host(&id, group.as_deref(), before.as_deref())?;
+    state.hosts_changed();
+    Ok(())
+}
+
+/// Drag and drop: a group into another group (`None` - top level) before a sibling.
+#[tauri::command]
+pub fn group_move(
+    state: AppStateRef<'_>,
+    name: String,
+    parent: Option<String>,
+    before: Option<String>,
+) -> Result<(), CoreError> {
+    state
+        .hosts
+        .move_group(&name, parent.as_deref(), before.as_deref())?;
     state.hosts_changed();
     Ok(())
 }
@@ -108,4 +142,41 @@ pub fn group_set_project(
 #[tauri::command]
 pub fn project_info(path: String) -> termnest_core::project::ProjectInfo {
     termnest_core::project::info(&path)
+}
+
+#[derive(serde::Serialize)]
+pub struct PasswordLoginProbe {
+    pub methods: Vec<String>,
+    pub password_login: bool,
+}
+
+/// Asks the server itself which login methods it offers (no credentials are sent).
+#[tauri::command]
+pub async fn host_password_login(
+    state: AppStateRef<'_>,
+    id: String,
+) -> Result<PasswordLoginProbe, CoreError> {
+    let spec = super::layout::spec_for_host(&state, &id)?;
+    let methods = ssh::auth_methods(&spec.target(), &state.ctx).await?;
+    Ok(PasswordLoginProbe {
+        password_login: ssh::allows_password(&methods),
+        methods,
+    })
+}
+
+/// Forbids or allows password logins on the server (needs root or passwordless sudo).
+#[tauri::command]
+pub async fn host_set_password_login(
+    state: AppStateRef<'_>,
+    id: String,
+    allow: bool,
+) -> Result<keydeploy::PasswordLoginReport, CoreError> {
+    let spec = super::layout::spec_for_host(&state, &id)?;
+    keydeploy::set_password_login(
+        &spec.target(),
+        std::path::Path::new(&spec.key_path),
+        allow,
+        &state.ctx,
+    )
+    .await
 }

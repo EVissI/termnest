@@ -232,6 +232,54 @@ pub async fn connect(
         Auth::Password(_) => None,
     };
 
+    let mut handle = handshake(target, ctx).await?;
+    let timed_out = || {
+        CoreError::new(
+            ErrorKind::Timeout,
+            format!("Таймаут подключения к {}:{}", target.host, target.port),
+        )
+    };
+
+    let user = target.user.clone();
+    let result = match (auth, key) {
+        (Auth::Key(_), Some(key)) => {
+            let hash = handle
+                .best_supported_rsa_hash()
+                .await
+                .map_err(map_ssh_error)?
+                .flatten();
+            timeout(
+                AUTH_TIMEOUT,
+                handle
+                    .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash)),
+            )
+            .await
+        }
+        (Auth::Password(password), _) => {
+            timeout(
+                AUTH_TIMEOUT,
+                handle.authenticate_password(user, password.expose()),
+            )
+            .await
+        }
+        (Auth::Key(_), None) => unreachable!("key is loaded for key auth"),
+    };
+    let auth_result = result.map_err(|_| timed_out())?.map_err(map_ssh_error)?;
+    if !auth_result.success() {
+        let what = match auth {
+            Auth::Key(_) => "Сервер отклонил ключ",
+            Auth::Password(_) => "Неверный пароль или вход по паролю запрещён",
+        };
+        return Err(CoreError::new(
+            ErrorKind::AuthFailed,
+            format!("{what} (пользователь {})", target.user),
+        ));
+    }
+    Ok(handle)
+}
+
+/// TCP connection and SSH handshake with host key verification, no authentication.
+async fn handshake(target: &Target, ctx: &SshContext) -> CoreResult<Handle<Client>> {
     let host = target.host.as_str();
     let port = target.port;
     let timed_out = || {
@@ -273,52 +321,48 @@ pub async fn connect(
     )
     .await
     .map_err(|_| timed_out())?;
-    let mut handle = match handshake {
-        Ok(h) => h,
+    match handshake {
+        Ok(h) => Ok(h),
         Err(e) => {
             if let Some(v) = verdict.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 return Err(v);
             }
-            return Err(map_ssh_error(e));
+            Err(map_ssh_error(e))
         }
-    };
-
-    let user = target.user.clone();
-    let result = match (auth, key) {
-        (Auth::Key(_), Some(key)) => {
-            let hash = handle
-                .best_supported_rsa_hash()
-                .await
-                .map_err(map_ssh_error)?
-                .flatten();
-            timeout(
-                AUTH_TIMEOUT,
-                handle
-                    .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash)),
-            )
-            .await
-        }
-        (Auth::Password(password), _) => {
-            timeout(
-                AUTH_TIMEOUT,
-                handle.authenticate_password(user, password.expose()),
-            )
-            .await
-        }
-        (Auth::Key(_), None) => unreachable!("key is loaded for key auth"),
-    };
-    let auth_result = result.map_err(|_| timed_out())?.map_err(map_ssh_error)?;
-    if !auth_result.success() {
-        let what = match auth {
-            Auth::Key(_) => "Сервер отклонил ключ",
-            Auth::Password(_) => "Неверный пароль или вход по паролю запрещён",
-        };
-        return Err(CoreError::new(
-            ErrorKind::AuthFailed,
-            format!("{what} (пользователь {})", target.user),
-        ));
     }
-    Ok(handle)
+}
+
+/// Authentication methods the server offers to `target.user` before any credentials
+/// (the reply to the "none" method), e.g. `publickey`, `password`.
+pub async fn auth_methods(target: &Target, ctx: &SshContext) -> CoreResult<Vec<String>> {
+    let mut handle = handshake(target, ctx).await?;
+    let reply = timeout(AUTH_TIMEOUT, handle.authenticate_none(target.user.clone()))
+        .await
+        .map_err(|_| {
+            CoreError::new(
+                ErrorKind::Timeout,
+                format!("Таймаут подключения к {}:{}", target.host, target.port),
+            )
+        })?
+        .map_err(map_ssh_error);
+    disconnect(&handle).await;
+    Ok(match reply? {
+        // The server let us in without any credentials.
+        client::AuthResult::Success => vec!["none".to_owned()],
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods
+            .iter()
+            .map(|m| <&str>::from(m).to_owned())
+            .collect(),
+    })
+}
+
+/// Whether the offered methods let someone in without a key.
+pub fn allows_password(methods: &[String]) -> bool {
+    methods
+        .iter()
+        .any(|m| matches!(m.as_str(), "password" | "keyboard-interactive" | "none"))
 }
 
 pub struct ExecOutput {

@@ -36,7 +36,8 @@ pub fn info(path: &str) -> ProjectInfo {
     }
 }
 
-/// Effective project: panel override, then the server's, then its group's.
+/// Effective project: panel override, then the server's, then its group's (the
+/// nearest enclosing group with a project).
 pub fn resolve<'a>(
     pane_project: Option<&'a str>,
     host: Option<&'a Host>,
@@ -50,10 +51,9 @@ pub fn resolve<'a>(
         return Some(p);
     }
     let group = host.group.as_deref()?;
-    groups
-        .iter()
-        .find(|g| g.name == group)
-        .and_then(|g| g.project.as_deref())
+    crate::hosts::group_chain(groups, group)
+        .into_iter()
+        .find_map(|g| g.project.as_deref())
 }
 
 #[cfg(test)]
@@ -77,17 +77,17 @@ mod tests {
 
     #[test]
     fn resolution_order() {
-        let groups = vec![Group {
-            name: "prod".into(),
-            collapsed: false,
-            project: Some("G".into()),
-        }];
+        let mut prod = Group::new("prod".into(), None);
+        prod.project = Some("G".into());
+        let groups = vec![prod, Group::new("web".into(), Some("prod".into()))];
         let with_own = host(Some("H"), Some("prod"));
         let group_only = host(None, Some("prod"));
         let nothing = host(None, None);
         assert_eq!(resolve(Some("P"), Some(&with_own), &groups), Some("P"));
         assert_eq!(resolve(None, Some(&with_own), &groups), Some("H"));
         assert_eq!(resolve(None, Some(&group_only), &groups), Some("G"));
+        let subgroup = host(None, Some("web"));
+        assert_eq!(resolve(None, Some(&subgroup), &groups), Some("G"));
         assert_eq!(resolve(None, Some(&nothing), &groups), None);
         assert_eq!(resolve(None, None, &groups), None);
     }

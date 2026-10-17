@@ -1,7 +1,8 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-dialog';
-  import { api, errorMessage, type Host } from '../lib/ipc';
-  import { store, toast, ui } from '../stores/app.svelte';
+  import { onMount } from 'svelte';
+  import { api, errorMessage, type Host, type PasswordLoginProbe } from '../lib/ipc';
+  import { confirmDialog, store, toast, ui } from '../stores/app.svelte';
   import Modal from './Modal.svelte';
   import { pickProject } from '../lib/projects';
 
@@ -19,6 +20,56 @@
   let saving = $state(false);
 
   const isNew = $derived(!host.id);
+
+  // What the server itself answers about password logins (not the stored settings).
+  let login = $state<PasswordLoginProbe | null>(null);
+  let loginBusy = $state<'probe' | 'change' | null>(null);
+  let loginError = $state('');
+  let loginSteps = $state<string[]>([]);
+
+  async function probeLogin(): Promise<void> {
+    loginBusy = 'probe';
+    loginError = '';
+    try {
+      login = await api.hostPasswordLogin(host.id);
+    } catch (err) {
+      login = null;
+      loginError = errorMessage(err);
+    } finally {
+      loginBusy = null;
+    }
+  }
+
+  async function changeLogin(): Promise<void> {
+    if (!login) return;
+    const allow = !login.password_login;
+    const ok = await confirmDialog({
+      title: allow ? 'Разрешить вход без ключа' : 'Отключить вход без ключа',
+      message: allow
+        ? `Сервер «${host.name}» снова будет принимать пароли. Это ослабляет защиту от подбора паролей.`
+        : `Сервер «${host.name}» перестанет принимать пароли, войти можно будет только по ключу. termnest проверит вход по ключу новым подключением и откатит изменение, если он не работает.`,
+      confirmLabel: allow ? 'Разрешить' : 'Отключить',
+      danger: allow,
+    });
+    if (!ok) return;
+    loginBusy = 'change';
+    loginError = '';
+    loginSteps = [];
+    try {
+      const report = await api.hostSetPasswordLogin(host.id, allow);
+      login = report;
+      loginSteps = report.steps;
+      if (report.password_login === allow) toast(allow ? 'Вход по паролю разрешён' : 'Вход по паролю отключён', 'ok');
+    } catch (err) {
+      loginError = errorMessage(err);
+    } finally {
+      loginBusy = null;
+    }
+  }
+
+  onMount(() => {
+    if (host.id) void probeLogin();
+  });
 
   async function browseKey(): Promise<void> {
     const dir = await api.sshDir().catch(() => null);
@@ -109,6 +160,37 @@
       <span>Заметка</span>
       <textarea bind:value={form.note} rows="2"></textarea>
     </label>
+    {#if !isNew}
+      <div class="field">
+        <span>Вход без ключа (проверяется на самом сервере)</span>
+        <div class="row login">
+          <span class="login-state" class:open={login?.password_login}>
+            {#if loginBusy === 'probe'}
+              Проверка...
+            {:else if loginBusy === 'change'}
+              Меняю настройки sshd...
+            {:else if login}
+              {login.password_login ? 'Сервер принимает пароль' : 'Только по ключу'}
+              <span class="methods">({login.methods.join(', ') || 'нет методов'})</span>
+            {:else}
+              Не проверено
+            {/if}
+          </span>
+          <button class="btn" type="button" onclick={probeLogin} disabled={loginBusy !== null}>Проверить</button>
+          {#if login}
+            <button class="btn" class:danger={!login.password_login} type="button" onclick={changeLogin} disabled={loginBusy !== null}>
+              {login.password_login ? 'Отключить вход без ключа' : 'Разрешить вход без ключа'}
+            </button>
+          {/if}
+        </div>
+        {#if loginError}<p class="error-text">{loginError}</p>{/if}
+        {#if loginSteps.length}
+          <ul class="steps">
+            {#each loginSteps as step, i (i)}<li>{step}</li>{/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
     <p class="hint">Пароли не сохраняются: вход только по ключу. Чтобы поставить ключ на сервер с паролем, используйте мастер в разделе «Ключи».</p>
     {#if error}<p class="error-text">{error}</p>{/if}
   </form>
@@ -138,5 +220,26 @@
   }
   textarea {
     resize: vertical;
+  }
+  .login {
+    align-items: center;
+  }
+  .login-state {
+    flex: 1;
+    min-width: 0;
+    color: var(--ok, var(--text));
+  }
+  .login-state.open {
+    color: var(--warn, var(--text));
+  }
+  .methods {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .steps {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: var(--text-dim);
+    font-size: 12px;
   }
 </style>

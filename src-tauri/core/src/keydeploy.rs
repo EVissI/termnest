@@ -168,11 +168,77 @@ impl DeployManager {
         };
 
         let mut steps = Vec::new();
-        let run = |cmd: String| {
-            let handle = handle.clone();
-            async move { ssh::exec(&handle, &cmd, None).await }
-        };
+        apply_drop_in(
+            &handle,
+            &p,
+            Some(KEYS_ONLY),
+            &DropInCheck {
+                target: &target,
+                key_path: &key_path,
+                ctx,
+            },
+            &mut steps,
+        )
+        .await?;
+        let effective = ssh::exec(
+            &handle,
+            &format!(
+                "{p}sh -c '{SBIN}; sshd -T 2>/dev/null | grep -i \"^passwordauthentication\"'"
+            ),
+            None,
+        )
+        .await
+        .map(|o| o.stdout.trim().to_owned())
+        .unwrap_or_default();
+        Ok(DisableReport { steps, effective })
+    }
 
+    /// Closes the wizard's password connection.
+    pub async fn finish(&self, deploy_id: u64) {
+        let run = lock(&self.runs).remove(&deploy_id);
+        if let Some(d) = run {
+            ssh::disconnect(&d.handle).await;
+        }
+    }
+}
+
+const KEYS_ONLY: &str = "# Created by termnest: key-only SSH logins.\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n";
+const ALLOW_PASSWORD: &str =
+    "# Created by termnest: password logins allowed.\nPasswordAuthentication yes\n";
+const SBIN: &str = "PATH=$PATH:/usr/sbin:/sbin";
+
+/// How to confirm that key login still works after an sshd change.
+struct DropInCheck<'a> {
+    target: &'a Target,
+    key_path: &'a std::path::Path,
+    ctx: &'a SshContext,
+}
+
+/// Writes (`Some`) or removes (`None`) the termnest drop-in, checks the config with
+/// `sshd -t`, reloads sshd and opens a new key connection. Any failure restores the
+/// previous file, so a mistake never locks the user out.
+async fn apply_drop_in(
+    handle: &Handle<Client>,
+    p: &str,
+    content: Option<&str>,
+    check: &DropInCheck<'_>,
+    steps: &mut Vec<String>,
+) -> CoreResult<()> {
+    let run = |cmd: String| async move { ssh::exec(handle, &cmd, None).await };
+    let write = |text: String| async move {
+        ssh::exec(
+            handle,
+            &format!("{p}sh -c 'cat > {DROP_IN_PATH} && chmod 644 {DROP_IN_PATH}'"),
+            Some(text.as_bytes()),
+        )
+        .await
+    };
+    let remove = format!("{p}rm -f {DROP_IN_PATH}");
+    let reload = format!(
+        "{p}sh -c 'systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || service sshd reload'"
+    );
+
+    if content.is_some() {
         // sshd must read the drop-in directory, otherwise the file has no effect.
         let include = run(format!(
             "{p}sh -c 'grep -Eiq \"^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/\\*\\.conf\" /etc/ssh/sshd_config'"
@@ -188,80 +254,144 @@ impl DeployManager {
             ));
         }
         steps.push("Найден Include /etc/ssh/sshd_config.d/*.conf".to_owned());
-
-        let content = "# Created by termnest: key-only SSH logins.\nPasswordAuthentication no\n";
-        let write = ssh::exec(
-            &handle,
-            &format!("{p}sh -c 'cat > {DROP_IN_PATH} && chmod 644 {DROP_IN_PATH}'"),
-            Some(content.as_bytes()),
-        )
-        .await?;
-        if write.exit_code != Some(0) {
-            return Err(CoreError::new(
-                ErrorKind::Remote,
-                format!("Не удалось создать {DROP_IN_PATH}: {}", write.stderr.trim()),
-            ));
-        }
-        steps.push(format!("Создан {DROP_IN_PATH}"));
-
-        let remove = format!("{p}rm -f {DROP_IN_PATH}");
-        let reload = format!(
-            "{p}sh -c 'systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || service sshd reload'"
-        );
-        let sbin = "PATH=$PATH:/usr/sbin:/sbin";
-
-        let check = run(format!("{p}sh -c '{sbin}; sshd -t'")).await?;
-        if check.exit_code != Some(0) {
-            let _ = run(remove.clone()).await;
-            return Err(CoreError::new(
-                ErrorKind::Remote,
-                format!("sshd -t нашёл ошибку, файл удалён: {}", check.stderr.trim()),
-            ));
-        }
-        steps.push("Проверка конфигурации sshd -t пройдена".to_owned());
-
-        let reloaded = run(reload.clone()).await?;
-        if reloaded.exit_code != Some(0) {
-            let _ = run(remove.clone()).await;
-            return Err(CoreError::new(
-                ErrorKind::Remote,
-                format!(
-                    "Не удалось перезагрузить sshd, файл удалён: {}",
-                    reloaded.stderr.trim()
-                ),
-            ));
-        }
-        steps.push("sshd перезагружен".to_owned());
-
-        if let Err(e) = verify_key_login(&target, &key_path, ctx).await {
-            let _ = run(remove).await;
-            let _ = run(reload).await;
-            return Err(CoreError::new(
-                ErrorKind::Remote,
-                format!(
-                    "После изменения вход по ключу не работает ({}), изменения откатаны",
-                    e.message
-                ),
-            ));
-        }
-        steps.push("Новое подключение по ключу успешно".to_owned());
-
-        let effective = run(format!(
-            "{p}sh -c '{sbin}; sshd -T 2>/dev/null | grep -i \"^passwordauthentication\"'"
-        ))
-        .await
-        .map(|o| o.stdout.trim().to_owned())
-        .unwrap_or_default();
-        Ok(DisableReport { steps, effective })
     }
 
-    /// Closes the wizard's password connection.
-    pub async fn finish(&self, deploy_id: u64) {
-        let run = lock(&self.runs).remove(&deploy_id);
-        if let Some(d) = run {
-            ssh::disconnect(&d.handle).await;
+    let previous = run(format!("{p}cat {DROP_IN_PATH}")).await?;
+    let previous = (previous.exit_code == Some(0)).then_some(previous.stdout);
+    let restore = || async {
+        let _ = match &previous {
+            Some(text) => write(text.clone()).await,
+            None => run(remove.clone()).await,
+        };
+    };
+
+    match content {
+        Some(text) => {
+            let out = write(text.to_owned()).await?;
+            if out.exit_code != Some(0) {
+                restore().await;
+                return Err(CoreError::new(
+                    ErrorKind::Remote,
+                    format!("Не удалось записать {DROP_IN_PATH}: {}", out.stderr.trim()),
+                ));
+            }
+            steps.push(format!("Записан {DROP_IN_PATH}"));
+        }
+        None => {
+            let out = run(remove.clone()).await?;
+            if out.exit_code != Some(0) {
+                return Err(CoreError::new(
+                    ErrorKind::Remote,
+                    format!("Не удалось удалить {DROP_IN_PATH}: {}", out.stderr.trim()),
+                ));
+            }
+            steps.push(format!("Удалён {DROP_IN_PATH}"));
         }
     }
+
+    let test = run(format!("{p}sh -c '{SBIN}; sshd -t'")).await?;
+    if test.exit_code != Some(0) {
+        restore().await;
+        return Err(CoreError::new(
+            ErrorKind::Remote,
+            format!(
+                "sshd -t нашёл ошибку, изменения откатаны: {}",
+                test.stderr.trim()
+            ),
+        ));
+    }
+    steps.push("Проверка конфигурации sshd -t пройдена".to_owned());
+
+    let reloaded = run(reload.clone()).await?;
+    if reloaded.exit_code != Some(0) {
+        restore().await;
+        return Err(CoreError::new(
+            ErrorKind::Remote,
+            format!(
+                "Не удалось перезагрузить sshd, изменения откатаны: {}",
+                reloaded.stderr.trim()
+            ),
+        ));
+    }
+    steps.push("sshd перезагружен".to_owned());
+
+    if let Err(e) = verify_key_login(check.target, check.key_path, check.ctx).await {
+        restore().await;
+        let _ = run(reload).await;
+        return Err(CoreError::new(
+            ErrorKind::Remote,
+            format!(
+                "После изменения вход по ключу не работает ({}), изменения откатаны",
+                e.message
+            ),
+        ));
+    }
+    steps.push("Новое подключение по ключу успешно".to_owned());
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PasswordLoginReport {
+    pub steps: Vec<String>,
+    /// Methods the server offers now (checked with a new connection).
+    pub methods: Vec<String>,
+    /// Someone can log in without a key (password or keyboard-interactive).
+    pub password_login: bool,
+}
+
+/// Forbids (`allow == false`) or allows password logins on a server, connecting with
+/// the server's key. The result is checked against what the server really offers.
+pub async fn set_password_login(
+    target: &Target,
+    key_path: &std::path::Path,
+    allow: bool,
+    ctx: &SshContext,
+) -> CoreResult<PasswordLoginReport> {
+    let handle = ssh::connect(target, Auth::Key(key_path), ctx).await?;
+    let result = async {
+        let (prefix, note) = detect_privileges(&handle).await;
+        let Some(p) = prefix else {
+            return Err(CoreError::new(
+                ErrorKind::PermissionDenied,
+                format!("{note}. {}", manual_instructions()),
+            ));
+        };
+        let mut steps = vec![note];
+        let check = DropInCheck {
+            target,
+            key_path,
+            ctx,
+        };
+        if allow {
+            // Our own file is the usual reason: removing it is the smallest change.
+            let ours = ssh::exec(&handle, &format!("{p}test -e {DROP_IN_PATH}"), None).await?;
+            if ours.exit_code == Some(0) {
+                apply_drop_in(&handle, &p, None, &check, &mut steps).await?;
+            }
+            let methods = ssh::auth_methods(target, ctx).await?;
+            if !ssh::allows_password(&methods) {
+                apply_drop_in(&handle, &p, Some(ALLOW_PASSWORD), &check, &mut steps).await?;
+            }
+        } else {
+            apply_drop_in(&handle, &p, Some(KEYS_ONLY), &check, &mut steps).await?;
+        }
+        let methods = ssh::auth_methods(target, ctx).await?;
+        let password_login = ssh::allows_password(&methods);
+        if password_login != allow {
+            steps.push(
+                "Сервер всё ещё ведёт себя иначе: настройку переопределяет другой файл или Match-блок sshd_config"
+                    .to_owned(),
+            );
+        }
+        Ok(PasswordLoginReport {
+            steps,
+            methods,
+            password_login,
+        })
+    }
+    .await;
+    ssh::disconnect(&handle).await;
+    result
 }
 
 async fn verify_key_login(
@@ -295,9 +425,9 @@ async fn detect_privileges(handle: &Handle<Client>) -> (Option<String>, String) 
 
 pub fn manual_instructions() -> String {
     format!(
-        "Вручную: от root создайте {DROP_IN_PATH} со строкой «PasswordAuthentication no», \
-         выполните «sshd -t», затем «systemctl reload ssh» и, не закрывая текущую сессию, \
-         проверьте вход по ключу в новом окне."
+        "Вручную: от root создайте {DROP_IN_PATH} со строкой «PasswordAuthentication no» \
+         (или «yes», чтобы разрешить пароль), выполните «sshd -t», затем «systemctl reload ssh» \
+         и, не закрывая текущую сессию, проверьте вход по ключу в новом окне."
     )
 }
 
