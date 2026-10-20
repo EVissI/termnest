@@ -157,3 +157,7 @@ cargo test -p termnest-core --test live_ssh
 A disposable server: `docker run -d -p 127.0.0.1:2222:2222 -e PUBLIC_KEY="<public key>"
 -e USER_NAME=tester -e PASSWORD_ACCESS=true -e USER_PASSWORD=<password>
 linuxserver/openssh-server`.
+
+## License
+
+[MIT](LICENSE)
