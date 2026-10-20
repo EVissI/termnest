@@ -77,9 +77,12 @@
       .finally(() => (attaching = false));
   });
 
+  // Every layout update replaces the pane object; only a real session change may resubscribe.
+  const sessionId = $derived(pane.session);
+
   // Subscribe to the session output; buffered output is replayed first.
   $effect(() => {
-    const id = pane.session;
+    const id = sessionId;
     const v = view;
     if (id === null || !v) return;
 
@@ -87,7 +90,10 @@
     let subscription: number | null = null;
     let cancelled = false;
     api
-      .subscribe(id, (data) => v.write(data))
+      // A dropped subscription can still deliver its replay after the next reset; ignore it.
+      .subscribe(id, (data) => {
+        if (!cancelled) v.write(data);
+      })
       .then((sub) => {
         if (cancelled) api.unsubscribe(id, sub).catch(() => {});
         else subscription = sub;
