@@ -2,12 +2,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use russh::client::Msg;
 use russh::{Channel, ChannelMsg};
 use tokio::sync::mpsc;
+use zeroize::Zeroizing;
 
+use super::autopass::{AutoPassword, Step, Switch};
 use super::{Command, ConnectSpec, SessionEntry, SessionState};
 use crate::error::{CoreError, CoreResult, ErrorKind};
 use crate::ssh::{self, Auth, SshContext};
@@ -103,7 +105,7 @@ impl Runner {
                     reconnecting = false;
                     attempt = 0;
 
-                    let end = self.pump(channel, spec.startup_command()).await;
+                    let end = self.pump(channel, spec.startup_switch()).await;
                     self.entry.set_handle(None);
                     self.entry.drop_sftp().await;
                     ssh::disconnect(&handle).await;
@@ -199,20 +201,42 @@ impl Runner {
         }
     }
 
-    async fn pump(&mut self, channel: Channel<Msg>, startup: Option<String>) -> End {
+    async fn pump(&mut self, channel: Channel<Msg>, startup: Option<Switch>) -> End {
         let (mut reader, writer) = channel.split();
         // The size may have changed while the PTY was being requested.
         let _ = writer.window_change(self.size.0, self.size.1, 0, 0).await;
+        let mut auto: Option<AutoPassword> = None;
         // The terminal buffers it until the shell reads input, like typing ahead.
-        if let Some(cmd) = startup {
-            let _ = writer.data(format!("{cmd}\r").as_bytes()).await;
+        if let Some(sw) = startup {
+            let _ = writer.data(format!("{}\r", sw.command).as_bytes()).await;
+            auto = sw.password.map(|p| AutoPassword::new(p, Instant::now()));
         }
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
         let mut exit_code = None;
         let mut exited = false;
         loop {
             tokio::select! {
                 msg = reader.wait() => match msg {
-                    Some(ChannelMsg::Data { data }) => self.entry.push_output(&data),
+                    Some(ChannelMsg::Data { data }) => {
+                        self.entry.push_output(&data);
+                        if let Some(f) = auto.as_mut() {
+                            match f.output(&data, Instant::now()) {
+                                Step::Wait => {}
+                                Step::Answer => {
+                                    let mut line = Zeroizing::new(f.secret().expose().as_bytes().to_vec());
+                                    line.push(b'\r');
+                                    if writer.data(&line[..]).await.is_err() {
+                                        return End::Lost;
+                                    }
+                                }
+                                Step::Rejected => {
+                                    auto = None;
+                                    self.entry.notice("termnest: сохранённый пароль не подошёл, введите его вручную и обновите в настройках сервера", 33);
+                                }
+                                Step::Done => auto = None,
+                            }
+                        }
+                    }
                     Some(ChannelMsg::ExtendedData { data, .. }) => self.entry.push_output(&data),
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         exit_code = Some(exit_status);
@@ -224,11 +248,24 @@ impl Runner {
                     }
                     Some(_) => {}
                 },
+                _ = tick.tick(), if auto.is_some() => {
+                    if auto.as_ref().is_some_and(|f| f.expired(Instant::now())) {
+                        auto = None;
+                    }
+                }
                 cmd = self.rx.recv() => match cmd {
                     Some(Command::Data(bytes)) => {
+                        // The user answers or types something else: stop watching.
+                        auto = None;
                         if writer.data(&bytes[..]).await.is_err() {
                             return End::Lost;
                         }
+                    }
+                    Some(Command::Switch(sw)) => {
+                        if writer.data(format!("{}\r", sw.command).as_bytes()).await.is_err() {
+                            return End::Lost;
+                        }
+                        auto = sw.password.map(|p| AutoPassword::new(p, Instant::now()));
                     }
                     Some(Command::Resize { cols, rows }) => {
                         self.size = (cols, rows);

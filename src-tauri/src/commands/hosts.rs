@@ -1,5 +1,6 @@
-use termnest_core::hosts::{Host, HostsList};
-use termnest_core::{keydeploy, monitor, paths, ssh, ssh_config, CoreError, ErrorKind};
+use termnest_core::hosts::{valid_user_name, Host, HostsList};
+use termnest_core::secret::SecretString;
+use termnest_core::{credstore, keydeploy, monitor, paths, ssh, ssh_config, CoreError, ErrorKind};
 
 use super::AppStateRef;
 
@@ -24,6 +25,9 @@ pub fn hosts_duplicate(state: AppStateRef<'_>, id: String) -> Result<Host, CoreE
 
 #[tauri::command]
 pub fn hosts_delete(state: AppStateRef<'_>, id: String) -> Result<(), CoreError> {
+    if let Some(host) = state.hosts.get(&id) {
+        credstore::delete_host(&id, password_users(&host).iter().map(String::as_str));
+    }
     state.hosts.delete(&id)?;
     state.hosts_changed();
     Ok(())
@@ -213,4 +217,88 @@ pub async fn monitor_sample(
 pub async fn monitor_close(state: AppStateRef<'_>, id: u64) -> Result<(), CoreError> {
     state.monitors.close(id).await;
     Ok(())
+}
+
+/// Users of a server that may have a saved password (login, working and quick users, root).
+fn password_users(host: &Host) -> Vec<String> {
+    let mut users = vec![host.user.clone()];
+    for u in host
+        .switch_user
+        .iter()
+        .chain(&host.quick_users)
+        .map(String::as_str)
+        .chain(["root"])
+    {
+        if !users.iter().any(|x| x == u) {
+            users.push(u.to_owned());
+        }
+    }
+    users
+}
+
+fn host(state: &crate::state::AppState, id: &str) -> Result<Host, CoreError> {
+    state
+        .hosts
+        .get(id)
+        .ok_or_else(|| CoreError::new(ErrorKind::NotFound, "Сервер не найден"))
+}
+
+/// Users of the server whose password is saved in the Windows Credential Manager.
+#[tauri::command]
+pub fn host_saved_passwords(state: AppStateRef<'_>, id: String) -> Result<Vec<String>, CoreError> {
+    let host = host(&state, &id)?;
+    Ok(password_users(&host)
+        .into_iter()
+        .filter(|u| credstore::exists(&id, u))
+        .collect())
+}
+
+/// Saves the password of a server user (used to answer sudo/su prompts).
+#[tauri::command]
+pub fn host_password_save(
+    state: AppStateRef<'_>,
+    id: String,
+    user: String,
+    password: SecretString,
+) -> Result<(), CoreError> {
+    host(&state, &id)?;
+    if !valid_user_name(&user) {
+        return Err(CoreError::invalid("Некорректное имя пользователя"));
+    }
+    credstore::save(&id, &user, &password)
+}
+
+#[tauri::command]
+pub fn host_password_delete(
+    state: AppStateRef<'_>,
+    id: String,
+    user: String,
+) -> Result<(), CoreError> {
+    host(&state, &id)?;
+    credstore::delete(&id, &user)
+}
+
+/// Becomes `user` in the session's shell; a saved password answers the prompt.
+#[tauri::command]
+pub fn session_switch_user(
+    state: AppStateRef<'_>,
+    session: u64,
+    user: String,
+) -> Result<(), CoreError> {
+    if !valid_user_name(&user) {
+        return Err(CoreError::invalid("Некорректное имя пользователя"));
+    }
+    let spec = state.sessions.spec(session)?;
+    let saved = spec.host_id.as_deref().and_then(|id| state.hosts.get(id));
+    let method = saved
+        .as_ref()
+        .map(|h| h.switch_method)
+        .unwrap_or(spec.switch_method);
+    let password = spec
+        .host_id
+        .as_deref()
+        .and_then(|id| credstore::load(id, method.password_user(&spec.user, &user)));
+    state
+        .sessions
+        .switch_user(session, method.command(&user), password)
 }

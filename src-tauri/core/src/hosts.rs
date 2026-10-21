@@ -31,6 +31,14 @@ impl SwitchMethod {
         *self == Self::Sudo
     }
 
+    /// Whose password the command asks for: sudo wants the login user's, su the target's.
+    pub fn password_user<'a>(self, login: &'a str, target: &'a str) -> &'a str {
+        match self {
+            Self::Sudo => login,
+            Self::Su => target,
+        }
+    }
+
     /// Shell command that opens a login shell of `user`.
     pub fn command(self, user: &str) -> String {
         match (self, user == "root") {

@@ -5,7 +5,7 @@ import ts from 'typescript-eslint';
 import { defineConfig } from 'eslint/config';
 
 export default defineConfig(
-  { ignores: ['dist/', 'release/', 'node_modules/', 'src-tauri/'] },
+  { ignores: ['dist/', 'release/', 'node_modules/', 'src-tauri/', '.claude/'] },
   js.configs.recommended,
   ts.configs.recommended,
   svelte.configs.recommended,

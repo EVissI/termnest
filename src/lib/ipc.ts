@@ -436,6 +436,11 @@ export const api = {
   groupMove: (name: string, parent: string | null, before: string | null) =>
     invoke<void>('group_move', { name, parent, before }),
   hostMove: (id: string, group: string | null, before: string | null) => invoke<void>('host_move', { id, group, before }),
+  hostSavedPasswords: (id: string) => invoke<string[]>('host_saved_passwords', { id }),
+  hostPasswordSave: (id: string, user: string, password: string) =>
+    invoke<void>('host_password_save', { id, user, password }),
+  hostPasswordDelete: (id: string, user: string) => invoke<void>('host_password_delete', { id, user }),
+  sessionSwitchUser: (session: number, user: string) => invoke<void>('session_switch_user', { session, user }),
   monitorOpen: (host: string | null, session: number | null) => invoke<MonitorOpened>('monitor_open', { host, session }),
   monitorSample: (id: number) => invoke<ServerInfo>('monitor_sample', { id }),
   monitorClose: (id: number) => invoke<void>('monitor_close', { id }),

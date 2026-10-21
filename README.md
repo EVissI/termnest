@@ -17,7 +17,9 @@ Full specification: [SPEC.md](SPEC.md).
   `authorized_keys` (your own keys and the key of the connection are marked).
 - Login user and working user per server: log in as one user and become another
   (`sudo -i` / `su -`) right after connecting and after every reconnect; the panel
-  header has a quick switch menu for root and other configured users.
+  header has a quick switch menu for root and other configured users. sudo/su
+  passwords can be saved in the Windows Credential Manager; termnest types one only in
+  answer to a password prompt within 10 seconds of the switch command, and only once.
 - Password logins per server: the edit dialog asks the server itself which login
   methods it offers and can forbid or allow logins without a key (sshd drop-in,
   checked with `sshd -t`, rolled back if key login stops working).

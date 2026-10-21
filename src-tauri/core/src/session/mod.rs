@@ -1,6 +1,7 @@
 //! SSH sessions. A session lives here independently of any window or panel;
 //! the UI only subscribes to its output and sends input by id.
 
+mod autopass;
 mod output;
 mod runner;
 
@@ -61,6 +62,16 @@ impl ConnectSpec {
         crate::hosts::valid_user_name(user).then(|| self.switch_method.command(user))
     }
 
+    /// The startup switch with its saved password, if any.
+    fn startup_switch(&self) -> Option<autopass::Switch> {
+        let command = self.startup_command()?;
+        let target = self.switch_user.as_deref()?;
+        let password = self.host_id.as_deref().and_then(|host| {
+            crate::credstore::load(host, self.switch_method.password_user(&self.user, target))
+        });
+        Some(autopass::Switch { command, password })
+    }
+
     pub fn target(&self) -> Target {
         Target {
             user: self.user.clone(),
@@ -104,6 +115,8 @@ pub trait StateSink: Send + Sync + 'static {
 
 pub(crate) enum Command {
     Data(Vec<u8>),
+    /// Type a user switch command and answer its password prompt.
+    Switch(autopass::Switch),
     Resize {
         cols: u32,
         rows: u32,
@@ -275,6 +288,16 @@ impl SessionManager {
             return Ok(());
         }
         self.send(id, Command::Data(data))
+    }
+
+    /// Types a user switch command; a saved password answers the prompt it shows.
+    pub fn switch_user(
+        &self,
+        id: SessionId,
+        command: String,
+        password: Option<crate::secret::SecretString>,
+    ) -> CoreResult<()> {
+        self.send(id, Command::Switch(autopass::Switch { command, password }))
     }
 
     /// Writes the same input to several sessions (broadcast, snippets). Unknown ids are skipped.

@@ -174,7 +174,7 @@
     const type = (text: string) => sessionCall((id) => api.write(id, new TextEncoder().encode(`${text}\r`)));
     const items: MenuItem[] = switchUsers.map((u) => {
       const cmd = switchCommand(method, u);
-      return { label: `Стать ${u} (${cmd})`, action: () => type(cmd) };
+      return { label: `Стать ${u} (${cmd})`, action: () => sessionCall((id) => api.sessionSwitchUser(id, u)) };
     });
     items.push(
       { separator: true, label: '' },

@@ -70,8 +70,50 @@
     }
   }
 
+  // Passwords that answer sudo/su prompts, kept in the Windows Credential Manager.
+  let saved = $state<string[]>([]);
+  let typed = $state<Record<string, string>>({});
+  let passwordError = $state('');
+
+  /** sudo asks for the login user's password, su for the target user's. */
+  const passwordUsers = $derived.by(() => {
+    const login = form.user.trim();
+    if (form.switch_method === 'sudo') return login ? [login] : [];
+    const list = [form.switch_user.trim(), ...form.quick_users.split(/[,\s]+/), 'root'].map((u) => u.trim());
+    return [...new Set(list.filter((u) => u && u !== login))];
+  });
+
+  async function loadSaved(): Promise<void> {
+    saved = await api.hostSavedPasswords(host.id).catch(() => []);
+  }
+
+  async function savePassword(user: string): Promise<void> {
+    passwordError = '';
+    try {
+      await api.hostPasswordSave(host.id, user, typed[user] ?? '');
+      typed[user] = '';
+      await loadSaved();
+      toast(`Пароль ${user} сохранён в Windows`, 'ok', 2500);
+    } catch (err) {
+      passwordError = errorMessage(err);
+    }
+  }
+
+  async function deletePassword(user: string): Promise<void> {
+    passwordError = '';
+    try {
+      await api.hostPasswordDelete(host.id, user);
+      await loadSaved();
+    } catch (err) {
+      passwordError = errorMessage(err);
+    }
+  }
+
   onMount(() => {
-    if (host.id) void probeLogin();
+    if (host.id) {
+      void probeLogin();
+      void loadSaved();
+    }
   });
 
   async function browseKey(): Promise<void> {
@@ -168,8 +210,37 @@
     {#if form.switch_user.trim() && form.switch_user.trim() !== form.user.trim()}
       <p class="hint">
         После входа termnest наберёт «{switchCommand(form.switch_method, form.switch_user.trim())}», в том числе после переподключения.
-        Пароль sudo или su вводится в терминале и не сохраняется. SFTP, информация о сервере и MCP работают под логином.
+        SFTP, информация о сервере и MCP работают под логином.
       </p>
+    {/if}
+    {#if !isNew && (form.switch_user.trim() || form.quick_users.trim())}
+      <div class="field">
+        <span>Пароли для {form.switch_method === 'sudo' ? 'sudo' : 'su'} (хранятся в диспетчере учётных данных Windows)</span>
+        {#each passwordUsers as u (u)}
+          <div class="row pw-row">
+            <span class="pw-user">{u}</span>
+            <input
+              type="password"
+              autocomplete="off"
+              placeholder={saved.includes(u) ? 'Сохранён (введите новый для замены)' : 'Не сохранён'}
+              bind:value={typed[u]}
+              onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), void savePassword(u))}
+              aria-label="Пароль {u}"
+            />
+            <button class="btn" type="button" disabled={!typed[u]} onclick={() => savePassword(u)}>Сохранить</button>
+            {#if saved.includes(u)}
+              <button class="btn" type="button" onclick={() => deletePassword(u)}>Удалить</button>
+            {/if}
+          </div>
+        {/each}
+        {#if passwordError}<p class="error-text">{passwordError}</p>{/if}
+        <p class="hint">
+          termnest вводит пароль только в ответ на запрос пароля в течение 10 секунд после команды и только один раз.
+          Если пароль не подошёл, придётся ввести его вручную.
+        </p>
+      </div>
+    {:else if isNew && form.switch_user.trim()}
+      <p class="hint">Пароль для переключения можно сохранить после создания сервера.</p>
     {/if}
     <label class="field">
       <span>Группа</span>
@@ -222,7 +293,7 @@
         {/if}
       </div>
     {/if}
-    <p class="hint">Пароли не сохраняются: вход только по ключу. Чтобы поставить ключ на сервер с паролем, используйте мастер в разделе «Ключи».</p>
+    <p class="hint">Пароли для входа не сохраняются: вход только по ключу. Чтобы поставить ключ на сервер с паролем, используйте мастер в разделе «Ключи».</p>
     {#if error}<p class="error-text">{error}</p>{/if}
   </form>
   {#snippet footer()}
@@ -243,6 +314,20 @@
   }
   .method {
     width: 130px;
+  }
+  .pw-row {
+    align-items: center;
+    margin-top: 4px;
+  }
+  .pw-user {
+    width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--mono, monospace);
+  }
+  .pw-row input {
+    flex: 1;
+    width: auto;
   }
   .row .field {
     min-width: 0;

@@ -5,6 +5,7 @@
 //! on any platform (including the Linux build container).
 
 pub mod agents;
+pub mod credstore;
 pub mod error;
 pub mod hostkeys;
 pub mod hosts;
