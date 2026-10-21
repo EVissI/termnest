@@ -15,6 +15,43 @@ fn default_port() -> u16 {
     22
 }
 
+/// How to become another user after logging in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SwitchMethod {
+    /// `sudo -i` / `sudo -iu NAME` (asks for the login user's password if needed).
+    #[default]
+    Sudo,
+    /// `su -` / `su - NAME` (asks for the target user's password).
+    Su,
+}
+
+impl SwitchMethod {
+    fn is_default(&self) -> bool {
+        *self == Self::Sudo
+    }
+
+    /// Shell command that opens a login shell of `user`.
+    pub fn command(self, user: &str) -> String {
+        match (self, user == "root") {
+            (Self::Sudo, true) => "sudo -i".to_owned(),
+            (Self::Sudo, false) => format!("sudo -iu {user}"),
+            (Self::Su, true) => "su -".to_owned(),
+            (Self::Su, false) => format!("su - {user}"),
+        }
+    }
+}
+
+/// A Unix user name safe to put into a shell command.
+pub fn valid_user_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     #[serde(default)]
@@ -33,6 +70,14 @@ pub struct Host {
     /// Local project folder this server belongs to (Claude Code integration).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// User to become right after login (`user` only logs in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switch_user: Option<String>,
+    #[serde(default, skip_serializing_if = "SwitchMethod::is_default")]
+    pub switch_method: SwitchMethod,
+    /// Extra users offered in the panel's quick switch menu.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quick_users: Vec<String>,
 }
 
 impl Host {
@@ -60,6 +105,26 @@ impl Host {
             .map(|g| g.trim().to_owned())
             .filter(|g| !g.is_empty());
         self.project = crate::project::normalize(self.project.take());
+        self.switch_user = self
+            .switch_user
+            .take()
+            .map(|u| u.trim().to_owned())
+            .filter(|u| !u.is_empty());
+        let mut quick: Vec<String> = Vec::new();
+        for u in self.quick_users.drain(..) {
+            let u = u.trim().to_owned();
+            if !u.is_empty() && !quick.contains(&u) {
+                quick.push(u);
+            }
+        }
+        self.quick_users = quick;
+        for u in self.switch_user.iter().chain(&self.quick_users) {
+            if !valid_user_name(u) {
+                return Err(CoreError::invalid(format!(
+                    "Некорректное имя пользователя: {u}"
+                )));
+            }
+        }
         if self.host.is_empty() || self.host.chars().any(char::is_whitespace) {
             return Err(CoreError::invalid("Укажите адрес сервера без пробелов"));
         }
@@ -71,6 +136,10 @@ impl Host {
         }
         if self.name.is_empty() {
             self.name = self.host.clone();
+        }
+        // Becoming the login user itself is a no-op.
+        if self.switch_user.as_deref() == Some(self.user.as_str()) {
+            self.switch_user = None;
         }
         Ok(())
     }
@@ -483,6 +552,9 @@ impl HostStore {
                     group: Some(group.to_owned()),
                     note: String::new(),
                     project: None,
+                    switch_user: None,
+                    switch_method: SwitchMethod::Sudo,
+                    quick_users: Vec::new(),
                 });
                 added += 1;
             }
@@ -507,7 +579,35 @@ mod tests {
             group: Some("prod".into()),
             note: String::new(),
             project: None,
+            switch_user: None,
+            switch_method: SwitchMethod::Sudo,
+            quick_users: Vec::new(),
         }
+    }
+
+    #[test]
+    fn switch_user() {
+        let dir = TestDir::new();
+        let store = HostStore::load(dir.path().join("h.toml")).unwrap();
+        let mut h = host("a");
+        h.user = "deploy".into();
+        h.switch_user = Some(" root ".into());
+        h.quick_users = vec!["www-data".into(), " ".into(), "www-data".into()];
+        let saved = store.upsert(h.clone()).unwrap();
+        assert_eq!(saved.switch_user.as_deref(), Some("root"));
+        assert_eq!(saved.quick_users, ["www-data"]);
+
+        h.switch_user = Some("deploy".into());
+        assert_eq!(store.upsert(h.clone()).unwrap().switch_user, None);
+
+        h.switch_user = Some("root; rm -rf /".into());
+        assert_eq!(store.upsert(h).unwrap_err().kind, ErrorKind::InvalidInput);
+
+        assert_eq!(SwitchMethod::Sudo.command("root"), "sudo -i");
+        assert_eq!(SwitchMethod::Sudo.command("app"), "sudo -iu app");
+        assert_eq!(SwitchMethod::Su.command("root"), "su -");
+        assert_eq!(SwitchMethod::Su.command("app"), "su - app");
+        assert!(!valid_user_name("-x"));
     }
 
     #[test]

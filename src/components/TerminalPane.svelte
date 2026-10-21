@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { TerminalView } from '../lib/terminal/TerminalView';
-  import { api, type Pane, type SessionStatus } from '../lib/ipc';
+  import { api, switchCommand, type Pane, type SessionStatus } from '../lib/ipc';
   import { attempt, broadcastSessions, focusPane, togglePaneSelection } from '../lib/actions';
   import { confirmDialog, sessionCwd, store, terminals, ui } from '../stores/app.svelte';
   import StatusIndicator from './StatusIndicator.svelte';
@@ -129,6 +129,7 @@
   const project = $derived(effectiveProject(pane));
   const projectSourceLabel = { pane: 'только эта панель', host: 'от сервера', group: 'от группы' } as const;
   let projectMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  let userMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   function openProjectMenu(e: MouseEvent): void {
     e.stopPropagation();
@@ -153,6 +154,39 @@
   function openServerInfo(): void {
     const title = pane.spec ? pane.spec.label || `${pane.spec.user}@${pane.spec.host}` : 'Сервер';
     ui.serverInfo = { host: pane.spec?.host_id ?? null, session: pane.session, title };
+  }
+
+  /** Users offered in the quick switch menu: the default one, configured extras, root. */
+  const switchUsers = $derived.by(() => {
+    const spec = pane.spec;
+    if (!spec) return [];
+    const host = spec.host_id ? store.hosts.hosts.find((h) => h.id === spec.host_id) : undefined;
+    const list = [host?.switch_user ?? spec.switch_user, ...(host?.quick_users ?? []), 'root'];
+    return [...new Set(list.filter((u): u is string => !!u && u !== spec.user))];
+  });
+
+  function openUserMenu(e: MouseEvent): void {
+    e.stopPropagation();
+    const spec = pane.spec;
+    if (!spec) return;
+    const host = spec.host_id ? store.hosts.hosts.find((h) => h.id === spec.host_id) : undefined;
+    const method = host?.switch_method ?? spec.switch_method;
+    const type = (text: string) => sessionCall((id) => api.write(id, new TextEncoder().encode(`${text}\r`)));
+    const items: MenuItem[] = switchUsers.map((u) => {
+      const cmd = switchCommand(method, u);
+      return { label: `Стать ${u} (${cmd})`, action: () => type(cmd) };
+    });
+    items.push(
+      { separator: true, label: '' },
+      { label: 'Вернуться к предыдущему пользователю (exit)', action: () => type('exit') },
+    );
+    if (host) {
+      items.push(
+        { separator: true, label: '' },
+        { label: 'Настроить пользователей сервера...', action: () => (ui.hostDialog = { ...host }) },
+      );
+    }
+    userMenu = { x: e.clientX, y: e.clientY, items };
   }
 
   function splitThis(direction: 'horizontal' | 'vertical'): void {
@@ -217,6 +251,19 @@
     />
     <StatusIndicator state={indicator} label={false} />
     <span class="label" title={pane.spec ? `${pane.spec.user}@${pane.spec.host}:${pane.spec.port}` : ''}>{label}</span>
+    {#if pane.spec && pane.session !== null}
+      <button
+        class="project user"
+        type="button"
+        title={pane.spec.switch_user
+          ? `Вход под ${pane.spec.user}, затем ${switchCommand(pane.spec.switch_method, pane.spec.switch_user)}. Нажмите, чтобы переключить пользователя`
+          : 'Переключить пользователя'}
+        onclick={(e) => openUserMenu(e)}
+      >
+        <Icon name="user" size={11} />
+        {#if pane.spec.switch_user}<span>{pane.spec.user} &gt; {pane.spec.switch_user}</span>{/if}
+      </button>
+    {/if}
     {#if project}
       <button
         class="project"
@@ -311,6 +358,10 @@
     {/if}
   </div>
 </div>
+
+{#if userMenu}
+  <ContextMenu x={userMenu.x} y={userMenu.y} items={userMenu.items} onclose={() => (userMenu = null)} />
+{/if}
 
 {#if projectMenu}
   <ContextMenu x={projectMenu.x} y={projectMenu.y} items={projectMenu.items} onclose={() => (projectMenu = null)} />

@@ -103,7 +103,7 @@ impl Runner {
                     reconnecting = false;
                     attempt = 0;
 
-                    let end = self.pump(channel).await;
+                    let end = self.pump(channel, spec.startup_command()).await;
                     self.entry.set_handle(None);
                     self.entry.drop_sftp().await;
                     ssh::disconnect(&handle).await;
@@ -199,10 +199,14 @@ impl Runner {
         }
     }
 
-    async fn pump(&mut self, channel: Channel<Msg>) -> End {
+    async fn pump(&mut self, channel: Channel<Msg>, startup: Option<String>) -> End {
         let (mut reader, writer) = channel.split();
         // The size may have changed while the PTY was being requested.
         let _ = writer.window_change(self.size.0, self.size.1, 0, 0).await;
+        // The terminal buffers it until the shell reads input, like typing ahead.
+        if let Some(cmd) = startup {
+            let _ = writer.data(format!("{cmd}\r").as_bytes()).await;
+        }
         let mut exit_code = None;
         let mut exited = false;
         loop {

@@ -55,6 +55,8 @@ pub fn spec_for_host(state: &AppState, id: &str) -> CoreResult<ConnectSpec> {
         host: host.host.clone(),
         port: host.port,
         key_path: resolve_key(state, host.key_path.as_deref())?,
+        switch_user: host.switch_user.clone(),
+        switch_method: host.switch_method,
     })
 }
 

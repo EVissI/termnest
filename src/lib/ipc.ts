@@ -42,6 +42,8 @@ export interface ConnectSpec {
   host: string;
   port: number;
   key_path: string;
+  switch_user?: string | null;
+  switch_method?: SwitchMethod;
 }
 
 export interface Pane {
@@ -93,6 +95,19 @@ export interface Host {
   group?: string | null;
   note: string;
   project?: string | null;
+  /** User to become right after login (`user` only logs in). */
+  switch_user?: string | null;
+  switch_method?: SwitchMethod;
+  /** Extra users in the panel's quick switch menu. */
+  quick_users?: string[];
+}
+
+export type SwitchMethod = 'sudo' | 'su';
+
+/** Same commands as `SwitchMethod::command` in the core. */
+export function switchCommand(method: SwitchMethod | undefined, user: string): string {
+  if ((method ?? 'sudo') === 'su') return user === 'root' ? 'su -' : `su - ${user}`;
+  return user === 'root' ? 'sudo -i' : `sudo -iu ${user}`;
 }
 
 export interface Group {

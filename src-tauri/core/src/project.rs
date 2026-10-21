@@ -72,6 +72,9 @@ mod tests {
             group: group.map(Into::into),
             note: String::new(),
             project: project.map(Into::into),
+            switch_user: None,
+            switch_method: Default::default(),
+            quick_users: Vec::new(),
         }
     }
 

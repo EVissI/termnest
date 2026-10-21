@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount } from 'svelte';
-  import { api, errorMessage, type Host, type PasswordLoginProbe } from '../lib/ipc';
+  import { api, errorMessage, switchCommand, type Host, type PasswordLoginProbe } from '../lib/ipc';
   import { confirmDialog, store, toast, ui } from '../stores/app.svelte';
   import Modal from './Modal.svelte';
   import { pickProject } from '../lib/projects';
@@ -15,6 +15,9 @@
     key_path: host.key_path ?? '',
     group: host.group ?? '',
     project: host.project ?? '',
+    switch_user: host.switch_user ?? '',
+    switch_method: host.switch_method ?? 'sudo',
+    quick_users: (host.quick_users ?? []).join(', '),
   });
   let error = $state('');
   let saving = $state(false);
@@ -93,6 +96,11 @@
         key_path: form.key_path.trim() || null,
         group: form.group.trim() || null,
         project: form.project.trim() || null,
+        switch_user: form.switch_user.trim() || null,
+        quick_users: form.quick_users
+          .split(/[,\s]+/)
+          .map((u) => u.trim())
+          .filter(Boolean),
       });
       toast(isNew ? 'Сервер добавлен' : 'Сервер сохранён', 'ok', 2500);
       ui.hostDialog = null;
@@ -113,7 +121,7 @@
     </label>
     <div class="row">
       <label class="field grow">
-        <span>Пользователь</span>
+        <span>Логин</span>
         <input bind:value={form.user} placeholder="root" required spellcheck="false" />
       </label>
       <label class="field grow2">
@@ -140,6 +148,29 @@
         <button class="btn" type="button" onclick={browseKey}>Обзор...</button>
       </div>
     </label>
+    <div class="row">
+      <label class="field grow">
+        <span>Работать под пользователем</span>
+        <input bind:value={form.switch_user} placeholder="Тот же, что логин" spellcheck="false" />
+      </label>
+      <label class="field method">
+        <span>Как переключаться</span>
+        <select bind:value={form.switch_method}>
+          <option value="sudo">sudo -i</option>
+          <option value="su">su -</option>
+        </select>
+      </label>
+    </div>
+    <label class="field">
+      <span>Быстрое переключение (пользователи через запятую)</span>
+      <input bind:value={form.quick_users} placeholder="Например, www-data, postgres" spellcheck="false" />
+    </label>
+    {#if form.switch_user.trim() && form.switch_user.trim() !== form.user.trim()}
+      <p class="hint">
+        После входа termnest наберёт «{switchCommand(form.switch_method, form.switch_user.trim())}», в том числе после переподключения.
+        Пароль sudo или su вводится в терминале и не сохраняется. SFTP, информация о сервере и MCP работают под логином.
+      </p>
+    {/if}
     <label class="field">
       <span>Группа</span>
       <input bind:value={form.group} list="host-groups" placeholder="Без группы" />
@@ -209,6 +240,9 @@
   }
   .port {
     width: 80px;
+  }
+  .method {
+    width: 130px;
   }
   .row .field {
     min-width: 0;

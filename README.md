@@ -15,6 +15,9 @@ Full specification: [SPEC.md](SPEC.md).
 - Server information window (server menu or the panel header): CPU, memory, network,
   disks and the busiest processes with auto refresh, plus the keys in every readable
   `authorized_keys` (your own keys and the key of the connection are marked).
+- Login user and working user per server: log in as one user and become another
+  (`sudo -i` / `su -`) right after connecting and after every reconnect; the panel
+  header has a quick switch menu for root and other configured users.
 - Password logins per server: the edit dialog asks the server itself which login
   methods it offers and can forbid or allow logins without a key (sshd drop-in,
   checked with `sshd -t`, rolled back if key login stops working).

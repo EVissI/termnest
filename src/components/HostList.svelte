@@ -362,7 +362,7 @@
       >
         <Icon name="terminal" size={13} />
         <span class="name">{h.name}</span>
-        <span class="addr">{h.user}@{h.host}</span>
+        <span class="addr">{h.user}{h.switch_user ? ` > ${h.switch_user}` : ''}@{h.host}</span>
       </button>
     {/if}
   {/each}

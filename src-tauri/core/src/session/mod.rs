@@ -47,9 +47,20 @@ pub struct ConnectSpec {
     pub host: String,
     pub port: u16,
     pub key_path: String,
+    /// User to become right after the shell opens (also after a reconnect).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switch_user: Option<String>,
+    #[serde(default)]
+    pub switch_method: crate::hosts::SwitchMethod,
 }
 
 impl ConnectSpec {
+    /// Typed into a fresh shell to become `switch_user`.
+    pub fn startup_command(&self) -> Option<String> {
+        let user = self.switch_user.as_deref()?;
+        crate::hosts::valid_user_name(user).then(|| self.switch_method.command(user))
+    }
+
     pub fn target(&self) -> Target {
         Target {
             user: self.user.clone(),
@@ -66,6 +77,8 @@ impl ConnectSpec {
             host: target.host.clone(),
             port: target.port,
             key_path,
+            switch_user: None,
+            switch_method: Default::default(),
         }
     }
 }
